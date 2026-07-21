@@ -1,0 +1,101 @@
+{% extends 'base.html'%}
+
+
+{% block head %}
+
+{% endblock %}
+
+
+{% block body %}
+<div class="lookup-container">
+
+    <!-- Single entity lookup -->
+    <section class="card">
+        <h2 class="card-title">Single lookup</h2>
+        <ul class="card-subtitle">
+            <li><strong>Enter a name or an ISIN</strong> (other fields improve the results)</li>
+        </ul>
+
+        <form class="lookup-form" novalidate>
+            <div class="field-row">
+                <div class="field">
+                    <label for="entity_name">Entity name</label>
+                    <input type="text" id="entity_name" name="entity_name"
+                           placeholder="e.g. CAIAC Fund Management AG">
+                </div>
+                <div class="field">
+                    <label for="isin">ISIN</label>
+                    <input type="text" id="isin" name="isin"
+                           placeholder="e.g. CZ0009010468">
+                </div>
+            </div>
+
+            <div class="field-row">
+                <div class="field">
+                    <label for="country">Country</label>
+                    <input type="text" id="country" name="country"
+                           placeholder="e.g. Czech Republic">
+                </div>
+                <div class="field">
+                    <label for="city">City</label>
+                    <input type="text" id="city" name="city"
+                           placeholder="e.g. Prague">
+                </div>
+            </div>
+
+            <div class="field-row">
+                <div class="field">
+                    <label for="street">Street</label>
+                    <input type="text" id="street" name="street"
+                           placeholder="e.g. Kotrcova 304/2">
+                </div>
+                <div class="field">
+                    <label for="postal_code">Postal code</label>
+                    <input type="text" id="postal_code" name="postal_code"
+                           placeholder="e.g. 13000">
+                </div>
+            </div>
+
+            <div class="form-footer">
+                <button type="submit" class="btn btn-primary">Search</button>
+                <span class="form-error" role="alert"></span>
+            </div>
+        </form>
+    </section>
+
+    <!-- Bulk file lookup -->
+    <section class="card">
+        <h2 class="card-title">Bulk lookup</h2>
+        <ul class="card-subtitle">
+            <li><strong>Enter a name or an ISIN</strong> (other fields improve the results)</li>
+            <li><strong>Column order:</strong> Name, ISIN, Country, City,
+                Street, Postal code</li>
+        </ul>
+
+        <form class="upload-form">
+            <label for="file_upload" class="dropzone">
+                <span class="dropzone-icon">&#8593;</span>
+                <span class="dropzone-text">
+                    Drag <strong>.xlsx</strong> or <strong>.csv</strong> files here
+                </span>
+                <span class="dropzone-hint">or click to select</span>
+                <input type="file" id="file_upload" name="file_upload"
+                       accept=".xlsx,.csv" hidden>
+            </label>
+
+            <div class="file-list">
+                <span class="file-count">0/1</span>
+                <div class="file-list-items">
+                    <span class="file-list-empty">No files selected yet</span>
+                </div>
+            </div>
+
+            <div class="form-footer">
+                <button type="submit" class="btn btn-primary">Search</button>
+                <span class="form-error" role="alert"></span>
+            </div>
+        </form>
+    </section>
+
+</div>
+{% endblock %}

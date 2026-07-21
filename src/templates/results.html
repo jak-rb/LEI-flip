@@ -1,0 +1,248 @@
+{% extends 'base.html' %}
+
+
+{% block body %}
+<div class="results-page">
+    <!-- Summary card: "Back to search" on the left, downloads on the right.
+         While a search streams here it shows live progress; a stored job
+         renders its final counts (see static/app.js). -->
+    <section id="results-card"
+             class="results-card{% if not search %} is-idle{% elif groups.matched_count == 0 %} no-matches{% endif %}"
+             data-has-job="{{ 'true' if search else 'false' }}"
+             aria-busy="false">
+        <div class="results-status">
+            <span class="spinner" aria-hidden="true"></span>
+            <span class="results-state-text" role="status">{% if not search %}Searching…{% elif groups.matched_count == 0 and groups.need_validation_count > 0 %}Needs review{% elif groups.matched_count == 0 %}No matches found{% else %}Search complete{% endif %}</span>
+        </div>
+
+        <div class="results-metrics">
+            <div class="metric metric-searched">
+                <span class="metric-label">Searched</span>
+                <span class="metric-value" id="metric-searched">{% if search %}{{ search.searched }} / {{ search.searched }}{% else %}0 / 0{% endif %}</span>
+            </div>
+            <div class="metric metric-matched">
+                <span class="metric-label">Matched</span>
+                <span class="metric-value" id="metric-matched">{% if search %}{{ groups.matched_count }}{% else %}0{% endif %}</span>
+            </div>
+            <div class="metric metric-validate">
+                <span class="metric-label">Need validation</span>
+                <span class="metric-value" id="metric-validate">{% if search %}{{ groups.need_validation_count }}{% else %}0{% endif %}</span>
+            </div>
+            <div class="metric metric-unmatched">
+                <span class="metric-label">Unmatched</span>
+                <span class="metric-value" id="metric-unmatched">{% if search %}{{ groups.unmatched_count }}{% else %}0{% endif %}</span>
+            </div>
+        </div>
+
+        <div class="results-actions results-actions-split">
+            <a class="btn btn-result btn-detailed" href="{{ url_for('index') }}">
+                &larr; Back to search
+            </a>
+            <div class="download-group">
+                {% if search %}
+                <a class="btn btn-result"
+                   href="{{ url_for('download_csv') }}?job={{ search.job_id }}">
+                    Download CSV
+                </a>
+                <a class="btn btn-result"
+                   href="{{ url_for('download_excel') }}?job={{ search.job_id }}">
+                    Download Excel
+                </a>
+                {% else %}
+                <button type="button" class="btn btn-result" disabled>Download CSV</button>
+                <button type="button" class="btn btn-result" disabled>Download Excel</button>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    {% if search %}
+    <h2 class="results-page-title">Detailed results</h2>
+
+    <!-- Validation stepper: one near-miss record at a time. The heading
+         counts how many records still need a decision. -->
+    {% if groups.to_validate %}
+    <h3 class="zone-title zone-validate">
+        To validate (<span class="validate-remaining">{{
+            groups.need_validation_count }}</span>)
+    </h3>
+    <section class="validation" data-job="{{ search.job_id }}">
+        <div class="validation-nav">
+            <button type="button" class="validation-prev"
+                    aria-label="Previous record">&larr;</button>
+            <span class="validation-position"></span>
+            <button type="button" class="validation-next"
+                    aria-label="Next record">&rarr;</button>
+        </div>
+
+        {% for rec in groups.to_validate %}
+        <article class="validate-record" data-index="{{ rec.index }}"
+                 data-decision="{{ rec.decision.status if rec.decision
+                                   else '' }}"
+                 data-chosen="{{ rec.decision.lei if rec.decision
+                                 and rec.decision.status == 'confirmed'
+                                 else '' }}">
+            <p class="detail-searched">
+                You searched:
+                <strong>{{ rec.input.name or rec.input.isin }}</strong>
+                {% if rec.input.country or rec.input.city %}
+                ({{ rec.input.country }}{% if rec.input.city %},
+                {{ rec.input.city }}{% endif %})
+                {% endif %}
+            </p>
+
+            <div class="results-table-wrap">
+                <table class="results-table candidates-table">
+                    <thead>
+                        <tr>
+                            <th class="col-expand"></th>
+                            <th>Legal name</th>
+                            <th>Country</th>
+                            <th>City</th>
+                            <th>Street</th>
+                            <th>GLEIF</th>
+                            <th class="col-overall">Overall match</th>
+                            <th class="col-confirm"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for c in rec.closest %}
+                        <tr class="candidate-row" data-lei="{{ c.lei }}">
+                            <td class="col-expand">
+                                <button type="button" class="candidate-expand"
+                                        aria-expanded="false"
+                                        aria-label="More details">
+                                    <span class="chevron" aria-hidden="true"></span>
+                                </button>
+                            </td>
+                            <td>{{ c.legal_name }}</td>
+                            <td>{{ c.country }}</td>
+                            <td>{{ c.city }}</td>
+                            <td>{{ c.street }}</td>
+                            <td>
+                                <a class="gleif-link"
+                                   href="https://search.gleif.org/#/record/{{ c.lei }}"
+                                   target="_blank" rel="noopener">View &#8599;</a>
+                            </td>
+                            <td class="col-overall">{{ c.overall|round|int }}%</td>
+                            <td class="col-confirm">
+                                <button type="button"
+                                        class="btn candidate-confirm">
+                                    Correct match
+                                </button>
+                            </td>
+                        </tr>
+                        <tr class="candidate-detail" hidden>
+                            <td colspan="8">
+                                <dl class="candidate-detail-fields">
+                                    <dt>LEI</dt>
+                                    <dd class="cell-lei">{{ c.lei }}</dd>
+                                    <dt>Status</dt><dd>{{ c.status }}</dd>
+                                    <dt>Legal address</dt>
+                                    <dd>{{ c.legal_address or "-" }}</dd>
+                                    <dt>HQ address</dt>
+                                    <dd>{{ c.hq_address or "-" }}</dd>
+                                    <dt>Field scores</dt>
+                                    <dd>
+                                        Name {{ c.name_score }} &middot;
+                                        City {{ c.city_score }} &middot;
+                                        Street {{ c.street_score }} &middot;
+                                        ZIP {{ c.zip_score }}
+                                    </dd>
+                                </dl>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="validate-actions">
+                <button type="button" class="btn validate-none">
+                    None of these
+                </button>
+            </div>
+        </article>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    <!-- Matched records -->
+    <h3 class="zone-title zone-matched">Matched records</h3>
+    {% if groups.matched %}
+    <div class="results-table-wrap">
+        <table class="results-table table-matched">
+            <thead>
+                <tr>
+                    <th>Searched name</th>
+                    <th>Legal name</th>
+                    <th>Country</th>
+                    <th>City</th>
+                    <th>Street</th>
+                    <th>GLEIF</th>
+                    <th>Overall match</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in groups.matched %}
+                <tr>
+                    <td>{{ m.searched }}</td>
+                    <td>{{ m.legal_name }}</td>
+                    <td>{{ m.country }}</td>
+                    <td>{{ m.city }}</td>
+                    <td>{{ m.street }}</td>
+                    <td>
+                        <a class="gleif-link"
+                           href="https://search.gleif.org/#/record/{{ m.lei }}"
+                           target="_blank" rel="noopener">View &#8599;</a>
+                    </td>
+                    <td>
+                        {% if m.overall is not none %}
+                        {{ m.overall|round|int }}%
+                        {% else %}-{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="results-page-note">No matched records.</p>
+    {% endif %}
+
+    <!-- No matches -->
+    <h3 class="zone-title zone-nomatch">No matches</h3>
+    {% if groups.no_match %}
+    <div class="results-table-wrap">
+        <table class="results-table table-nomatch">
+            <thead>
+                <tr>
+                    <th>Searched name</th>
+                    <th>Country</th>
+                    <th>City</th>
+                    <th>Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for n in groups.no_match %}
+                <tr>
+                    <td>{{ n.searched }}</td>
+                    <td>{{ n.country }}</td>
+                    <td>{{ n.city }}</td>
+                    <td>{{ n.notes }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="results-page-note">No unmatched records.</p>
+    {% endif %}
+    {% else %}
+    <p class="results-page-note" id="empty-note" hidden>
+        No results to show. This link may have expired (saved results are
+        kept for 30 days), or no search has been run yet.
+    </p>
+    {% endif %}
+</div>
+{% endblock %}

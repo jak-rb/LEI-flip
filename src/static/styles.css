@@ -1,0 +1,940 @@
+/* ---- Base ---- */
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background-color: #f4f8fc;
+    color: #1e293b;
+}
+
+/* ---- Header ---- */
+.site-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 2rem;
+    background-color: #1e293b;
+    color: #ffffff;
+}
+
+.brand {
+    display: flex;
+    flex-direction: column;
+}
+
+.brand-name {
+    font-size: 1.4rem;
+    font-weight: 700;
+}
+
+.brand-tagline {
+    font-size: 0.85rem;
+    font-weight: 400;
+    color: #94a3b8;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* ---- Buttons ---- */
+.btn {
+    border: none;
+    border-radius: 8px;
+    padding: 0.55rem 1rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+/* Neutral "?" button */
+.btn-help {
+    width: 2.6rem;
+    padding: 0.55rem 0;
+    background-color: #e2e8f0;
+    color: #1e293b;
+}
+
+.btn-help:hover {
+    background-color: #cbd5e1;
+}
+
+/* Red "Report bugs" button */
+.btn-report {
+    background-color: #dc2626;
+    color: #ffffff;
+}
+
+.btn-report:hover {
+    background-color: #b91c1c;
+}
+
+/* ---- Page content ---- */
+.page-content {
+    padding: 2rem;
+}
+
+/* Shown only when JavaScript is disabled (the app needs JS to run) */
+.noscript-banner {
+    max-width: 1100px;
+    margin: 0 auto 1.5rem;
+    padding: 0.85rem 1.25rem;
+    border: 1px solid #fcd34d;
+    border-radius: 10px;
+    background-color: #fffbeb;
+    color: #92400e;
+    font-weight: 600;
+}
+
+/* ---- Lookup layout: two cards side by side, centered with whitespace on the sides ---- */
+.lookup-container {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 1.5rem;
+}
+
+/* ---- Card ---- */
+.card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background-color: #ffffff;
+    border-radius: 12px;
+    padding: 2rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* Stack the cards before they get squeezed too narrow */
+@media (max-width: 900px) {
+    .lookup-container {
+        flex-direction: column;
+    }
+}
+
+.card-title {
+    margin: 0 0 1.25rem;
+    font-size: 1.4rem;
+    color: #1e293b;
+}
+
+.card-subtitle {
+    margin: 0 0 1.25rem;
+    color: #64748b;
+}
+
+ul.card-subtitle {
+    padding-left: 1.25rem;
+}
+
+ul.card-subtitle li {
+    margin-bottom: 0.4rem;
+}
+
+/* ---- Form fields ---- */
+.field {
+    margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.field label {
+    margin-bottom: 0.4rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.required {
+    color: #dc2626;
+}
+
+/* Make the form fill the card so the button can sit at the bottom */
+.lookup-form {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+/* Push the footer (button + error message) to the bottom of its card */
+.form-footer {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+/* Validation message shown next to the Search button */
+.form-error {
+    color: #dc2626;
+    font-size: 0.9rem;
+}
+
+.field input {
+    width: 100%;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font-size: 0.95rem;
+}
+
+.field input:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+/* Two fields side by side */
+.field-row {
+    display: flex;
+    gap: 1rem;
+}
+
+.field-row .field {
+    flex: 1;
+}
+
+/* ---- Primary action button ---- */
+.btn-primary {
+    align-self: flex-start;
+    width: 220px;
+    max-width: 100%;
+    /* Keep a fixed width: without this the flex row shrinks the button to
+       make room for a long error message next to it. Let the message wrap
+       instead. */
+    flex-shrink: 0;
+    background-color: #2563eb;
+    color: #ffffff;
+    padding: 0.7rem 1.4rem;
+    font-size: 1rem;
+}
+
+.btn-primary:hover {
+    background-color: #1d4ed8;
+}
+
+/* ---- Selected files list ---- */
+.file-list {
+    height: 2.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background-color: #f8fafc;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* "n/1" counter on the left */
+.file-count {
+    flex-shrink: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #64748b;
+}
+
+/* Holds the selected file (or the empty hint), filling the rest of the box */
+.file-list-items {
+    flex: 1;
+    min-width: 0;
+}
+
+.file-list-empty {
+    color: #94a3b8;
+    font-size: 0.9rem;
+}
+
+/* Selected file: name on the left, remove (x) button on the right */
+.file-list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    color: #1e293b;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-remove {
+    flex-shrink: 0;
+    border: none;
+    background: none;
+    font-size: 1.1rem;
+    line-height: 1;
+    color: #94a3b8;
+    cursor: pointer;
+    padding: 0 0.25rem;
+}
+
+.file-remove:hover {
+    color: #dc2626;
+}
+
+/* ---- File upload dropzone ---- */
+.upload-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    flex: 1;
+}
+
+.dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    padding: 1.25rem 1rem;
+    border: 2px dashed #cbd5e1;
+    border-radius: 10px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.dropzone:hover {
+    border-color: #2563eb;
+    background-color: #f8fafc;
+}
+
+/* While a file is being dragged over the zone */
+.dropzone.is-dragover {
+    border-color: #2563eb;
+    background-color: #eff6ff;
+}
+
+.dropzone-icon {
+    font-size: 1.5rem;
+    color: #64748b;
+}
+
+.dropzone-text {
+    color: #475569;
+}
+
+.dropzone-hint {
+    font-size: 0.85rem;
+    color: #94a3b8;
+}
+
+/* ---- Results / status card ---- */
+/* Spans the full width under the two lookup cards, same centered column. */
+.results-card {
+    max-width: 1100px;
+    margin: 1.5rem auto 0;
+    background-color: #ffffff;
+    border-radius: 12px;
+    padding: 1.75rem 2rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+/* Idle: nothing is being searched, so everything reads as muted gray. */
+.results-card.is-idle {
+    background-color: #f8fafc;
+    color: #94a3b8;
+}
+
+.results-status {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.results-card.is-idle .results-status {
+    color: #94a3b8;
+}
+
+/* CSS-only spinner. Static and gray by default, animates only while running. */
+.spinner {
+    width: 1.4rem;
+    height: 1.4rem;
+    border: 3px solid #e2e8f0;
+    border-top-color: #cbd5e1;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.results-card.is-running .spinner {
+    border-color: #cbd5e1;
+    border-top-color: #2563eb;
+    animation: spinner-rotate 0.8s linear infinite;
+}
+
+@keyframes spinner-rotate {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Error state: the status line turns red and carries the message. */
+.results-card.has-error .results-state-text {
+    color: #dc2626;
+}
+
+/* Completed but nothing matched: a distinct amber "No matches" state. */
+.results-card.no-matches .results-state-text {
+    color: #b45309;
+}
+
+/* Metrics: searched / found / confidence */
+.results-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.metric {
+    flex: 1;
+    min-width: 140px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 1rem 1.25rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background-color: #ffffff;
+}
+
+.results-card.is-idle .metric {
+    background-color: #f1f5f9;
+    border-color: #e2e8f0;
+}
+
+.metric-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #64748b;
+}
+
+.results-card.is-idle .metric-label {
+    color: #94a3b8;
+}
+
+.metric-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1e293b;
+}
+
+.results-card.is-idle .metric-value {
+    color: #cbd5e1;
+}
+
+/* Summary breakdown: the "Searched" total stays a plain white tile,
+   while each outcome tile gets a thick border and its number in its own
+   color (green matched, orange to validate, red unmatched). */
+.metric-matched {
+    border: 2px solid #16a34a;
+}
+
+.metric-matched .metric-value {
+    color: #16a34a;
+}
+
+.metric-validate {
+    border: 2px solid #d97706;
+}
+
+.metric-validate .metric-value {
+    color: #d97706;
+}
+
+.metric-unmatched {
+    border: 2px solid #dc2626;
+}
+
+.metric-unmatched .metric-value {
+    color: #dc2626;
+}
+
+/* Action buttons: downloads + detailed view */
+.results-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.btn-result {
+    background-color: #2563eb;
+    color: #ffffff;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+}
+
+.btn-result:hover {
+    background-color: #1d4ed8;
+}
+
+.btn-detailed {
+    background-color: #475569;
+}
+
+.btn-detailed:hover {
+    background-color: #334155;
+}
+
+/* Disabled state for both <button> and the anchor "button" */
+.btn-result:disabled,
+.btn-result.is-disabled {
+    background-color: #e2e8f0;
+    color: #94a3b8;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* On the detail page the card's actions split: "Back to search" on the
+   left, the download buttons grouped on the right. */
+.results-actions-split {
+    justify-content: space-between;
+    align-items: center;
+}
+
+.download-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+/* ---- Dialogs (Help, Report bugs) ---- */
+.dialog {
+    width: min(90vw, 540px);
+    border: none;
+    border-radius: 12px;
+    padding: 0;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    color: #1e293b;
+}
+
+.dialog::backdrop {
+    background-color: rgba(15, 23, 42, 0.45);
+}
+
+.dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.dialog-title {
+    margin: 0;
+    font-size: 1.25rem;
+}
+
+.dialog-close {
+    border: none;
+    background: none;
+    font-size: 1.6rem;
+    line-height: 1;
+    color: #64748b;
+    cursor: pointer;
+    padding: 0 0.25rem;
+}
+
+.dialog-close:hover {
+    color: #1e293b;
+}
+
+.dialog-body {
+    padding: 1.25rem 1.5rem 1.5rem;
+}
+
+.dialog-body p {
+    margin-top: 0;
+}
+
+.dialog-subtitle {
+    margin: 1.25rem 0 0.5rem;
+    font-size: 1rem;
+}
+
+.dialog-steps {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.dialog-steps li {
+    margin-bottom: 0.4rem;
+}
+
+.dialog-contacts {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.dialog-contacts li {
+    margin-bottom: 0.4rem;
+}
+
+/* ---- Detailed results page ---- */
+.results-page {
+    max-width: 1100px;
+    margin: 0 auto;
+}
+
+/* The summary card leads the detail page, so it sits flush at the top. */
+.results-page > .results-card {
+    margin-top: 0;
+    margin-bottom: 1.5rem;
+}
+
+.results-page-title {
+    margin: 0 0 0.25rem;
+    color: #1e293b;
+}
+
+.results-page-note {
+    margin: 0 0 1.5rem;
+    color: #64748b;
+}
+
+/* Let wide tables scroll inside their own container on small screens */
+.results-table-wrap {
+    overflow-x: auto;
+    background-color: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.results-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+}
+
+.results-table th,
+.results-table td {
+    padding: 0.85rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+    white-space: nowrap;
+}
+
+.results-table th {
+    background-color: #f1f5f9;
+    color: #475569;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.results-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.cell-lei {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+/* ---- Detailed results: validation workflow ---- */
+.detail-searched {
+    margin: 0 0 1rem;
+    color: #64748b;
+}
+
+/* The one-at-a-time review stepper. */
+.validation {
+    background-color: #ffffff;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.validation-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.validation-prev,
+.validation-next {
+    border: 1px solid #cbd5e1;
+    background-color: #ffffff;
+    border-radius: 8px;
+    width: 2.4rem;
+    height: 2.4rem;
+    font-size: 1.1rem;
+    color: #1e293b;
+    cursor: pointer;
+}
+
+.validation-prev:hover,
+.validation-next:hover {
+    background-color: #f1f5f9;
+}
+
+.validation-prev:disabled,
+.validation-next:disabled {
+    color: #cbd5e1;
+    cursor: not-allowed;
+}
+
+.validation-position {
+    min-width: 7rem;
+    text-align: center;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #64748b;
+}
+
+/* One record visible at a time; the stepper JS toggles .is-active. */
+.validate-record {
+    display: none;
+}
+
+.validate-record.is-active {
+    display: block;
+}
+
+@keyframes record-slide-right {
+    from { opacity: 0; transform: translateX(40px); }
+    to   { opacity: 1; transform: none; }
+}
+
+@keyframes record-slide-left {
+    from { opacity: 0; transform: translateX(-40px); }
+    to   { opacity: 1; transform: none; }
+}
+
+.validate-record.slide-right {
+    animation: record-slide-right 0.2s ease;
+}
+
+.validate-record.slide-left {
+    animation: record-slide-left 0.2s ease;
+}
+
+/* Candidate table: the closest-candidate look plus expand + confirm.
+   --confirm-col-width fixes the button column's width so the Overall
+   match column (pinned just left of it) can offset itself by exactly
+   that amount. */
+.candidates-table {
+    --confirm-col-width: 170px;
+}
+
+.candidates-table .col-expand {
+    width: 1%;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.candidates-table .col-confirm {
+    width: var(--confirm-col-width);
+    white-space: nowrap;
+    text-align: center;
+}
+
+/* Pin the Overall match percent and the confirm button to the right edge
+   so both stay visible when a long row scrolls horizontally inside its
+   wrapper (Overall match sits just left of the button). The box-shadow
+   marks the left edge of this pinned pair (a plain border would not paint
+   with border-collapse), so it lives on the leftmost pinned column. Each
+   state repeats its row's background so scrolled content does not show
+   through the pinned cells. */
+.candidates-table .col-confirm {
+    position: sticky;
+    right: 0;
+    background-color: #ffffff;
+}
+
+/* Fix the button to the column's inner width so the cell can never be
+   narrower than --confirm-col-width (auto table layout otherwise shrink-
+   wraps it to the button). If it were narrower, the Overall match
+   column's offset would overshoot and scrolled content would show through
+   the seam. 2rem = the cell's left + right padding (1rem each). */
+.candidates-table .candidate-confirm {
+    box-sizing: border-box;
+    width: calc(var(--confirm-col-width) - 2rem);
+}
+
+.candidates-table .col-overall {
+    position: sticky;
+    right: var(--confirm-col-width);
+    /* Right-align so the short percent hugs the pinned button rather
+       than stranding white space across this header-width column. */
+    text-align: right;
+    background-color: #ffffff;
+    box-shadow: -6px 0 6px -6px rgba(15, 23, 42, 0.15);
+}
+
+.candidates-table thead .col-confirm,
+.candidates-table thead .col-overall {
+    background-color: #f1f5f9;
+}
+
+.candidate-row.is-chosen .col-confirm,
+.candidate-row.is-chosen .col-overall {
+    background-color: #dcfce7;
+}
+
+.candidate-expand {
+    border: none;
+    background: none;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* A down-pointing triangle that flips to point up when the row is open. */
+.candidate-expand .chevron {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #64748b;
+    transition: transform 0.15s ease;
+}
+
+.candidate-expand:hover .chevron {
+    border-top-color: #1e293b;
+}
+
+.candidate-expand[aria-expanded="true"] .chevron {
+    transform: rotate(180deg);
+}
+
+.candidate-confirm {
+    background-color: #16a34a;
+    color: #ffffff;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+}
+
+.candidate-confirm:hover {
+    background-color: #15803d;
+}
+
+/* "None of these" chosen: de-emphasise the match buttons to grey. They
+   stay clickable, so picking one still overrides the "none" choice. */
+.candidate-confirm.is-muted {
+    background-color: #e2e8f0;
+    color: #64748b;
+}
+
+.candidate-confirm.is-muted:hover {
+    background-color: #cbd5e1;
+}
+
+/* A candidate the user has confirmed as the match for this record. */
+.candidate-row.is-chosen {
+    background-color: #dcfce7;
+}
+
+.candidate-detail td {
+    background-color: #f8fafc;
+}
+
+.candidate-detail-fields {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.35rem 1rem;
+    margin: 0 0 0.5rem;
+}
+
+.candidate-detail-fields dt {
+    font-weight: 600;
+    color: #64748b;
+}
+
+.candidate-detail-fields dd {
+    margin: 0;
+}
+
+.gleif-link {
+    color: #2563eb;
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.gleif-link:hover {
+    text-decoration: underline;
+}
+
+.validate-actions {
+    margin-top: 1rem;
+    text-align: right;
+}
+
+.validate-none {
+    background-color: #e2e8f0;
+    color: #1e293b;
+}
+
+.validate-none:hover {
+    background-color: #cbd5e1;
+}
+
+/* The record was marked "none of these". */
+.validate-none.is-chosen {
+    background-color: #fee2e2;
+    color: #991b1b;
+}
+
+/* Zone titles for the matched / no-match tables. */
+.zone-title {
+    margin: 1.5rem 0 0.75rem;
+    padding-left: 0.6rem;
+    font-size: 1.1rem;
+    border-left: 4px solid #cbd5e1;
+}
+
+.zone-validate {
+    border-left-color: #d97706;
+}
+
+.zone-matched {
+    border-left-color: #16a34a;
+}
+
+.zone-nomatch {
+    border-left-color: #dc2626;
+}
+
+/* Tint the matched / no-match table headers to match their zone. */
+.table-matched th {
+    background-color: #dcfce7;
+    color: #166534;
+}
+
+.table-nomatch th {
+    background-color: #fee2e2;
+    color: #991b1b;
+}
+
+/* Let the no-match notes wrap instead of forcing the table wide. */
+.table-nomatch td:last-child {
+    white-space: normal;
+    min-width: 18rem;
+}

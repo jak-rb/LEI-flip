@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>LEI lookup</title>
+        <link rel="stylesheet" href="{{url_for('static', filename = 'styles.css')}}">
+        {% block head %}{% endblock %}
+    </head>
+    <body>
+        <header class="site-header">
+            <div class="brand">
+                <span class="brand-name">LEI lookup</span>
+                <span class="brand-tagline">A tool for searching the GLEIF database</span>
+            </div>
+            <nav class="header-actions">
+                <button type="button" id="help-btn" class="btn btn-help"
+                        title="Help" aria-label="Help">?</button>
+                <button type="button" id="report-btn" class="btn btn-report">Report bugs</button>
+            </nav>
+        </header>
+
+        <main class="page-content">
+            <noscript>
+                <p class="noscript-banner">
+                    LEI lookup needs JavaScript to run. Please enable it in your
+                    browser and reload the page.
+                </p>
+            </noscript>
+            {% block body %}{% endblock %}
+        </main>
+
+        <!-- Help popup -->
+        <dialog id="help-dialog" class="dialog">
+            <form method="dialog">
+                <div class="dialog-header">
+                    <h2 class="dialog-title">How to use LEI lookup</h2>
+                    <button type="submit" class="dialog-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="dialog-body">
+                    <p>LEI lookup finds a company's Legal Entity Identifier (LEI)
+                       in the <a href="https://www.gleif.org/" target="_blank"
+                       rel="noopener">GLEIF</a> database. If a search by ISIN
+                       isn't found directly in GLEIF, the tool falls back to
+                       <strong>OpenFIGI</strong> (a free Bloomberg service) to
+                       look up the issuer by name.</p>
+
+                    <h3 class="dialog-subtitle">Single lookup</h3>
+                    <ol class="dialog-steps">
+                        <li>Enter an <strong>entity name</strong> or an
+                            <strong>ISIN</strong> (at least one; giving both, or
+                            adding an address, improves the result).</li>
+                        <li>Optionally add country, city, street, or postal
+                            code to narrow the result.</li>
+                        <li>Click <strong>Search</strong>.</li>
+                    </ol>
+
+                    <h3 class="dialog-subtitle">Bulk lookup</h3>
+                    <ol class="dialog-steps">
+                        <li>Prepare an <strong>.xlsx</strong> or <strong>.csv</strong>
+                            file, one entity per row, each with a name or an
+                            ISIN. Column order (header names don't matter):
+                            Name, ISIN, Country, City, Street, Postal code.</li>
+                        <li>Drag the file onto the upload area, or click to select it.</li>
+                        <li>Click <strong>Search</strong>.</li>
+                    </ol>
+
+                    <h3 class="dialog-subtitle">Choosing the right match</h3>
+                    <p>Every searched entity lands in one group:
+                       <strong>Matched</strong> (a confident LEI),
+                       <strong>Need validation</strong>, or
+                       <strong>Unmatched</strong>.</p>
+                    <ol class="dialog-steps">
+                        <li>For each entity that needs validation, the tool
+                            lists the closest candidates it found. Click
+                            <strong>Correct match</strong> on the right one, or
+                            <strong>None of these</strong> if none fit.</li>
+                        <li>Your choices are saved and flow into the CSV and
+                            Excel downloads.</li>
+                    </ol>
+                </div>
+            </form>
+        </dialog>
+
+        <!-- Report bugs popup -->
+        <dialog id="report-dialog" class="dialog">
+            <form method="dialog">
+                <div class="dialog-header">
+                    <h2 class="dialog-title">Report a bug</h2>
+                    <button type="submit" class="dialog-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="dialog-body">
+                    <p>Found a problem? Please get in touch:</p>
+                    <ul class="dialog-contacts">
+                        <li>Jakub Schrimpel -
+                            <a href="mailto:Jakub.Schrimpel@rb.cz">Jakub.Schrimpel@rb.cz</a></li>
+                        <li>Mikuláš Kadečka -
+                            <a href="mailto:Mikulas.Kadecka@rb.cz">Mikulas.Kadecka@rb.cz</a></li>
+                    </ul>
+                </div>
+            </form>
+        </dialog>
+
+        <script src="{{ url_for('static', filename='app.js') }}"></script>
+    </body>
+</html>
