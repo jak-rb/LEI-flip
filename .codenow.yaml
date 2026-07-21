@@ -1,0 +1,25 @@
+version: v1
+# If advanced mode is active CI pipelines use Dockerfile and helm descriptor from repository
+advancedMode:
+  enabled: false
+build:
+  # Image used by CI pipelines in build tasks
+  image: rbcz-codenow-dataplane-oci.artifactory.rb.cz/python:3.12.6-slim-bullseye
+  # definitions of environment variables that will be used in all stages of your pipeline
+  environmentVariables: []
+  #- key: variable1
+  #  value: value1
+  pipelines:
+    release:
+      pipeline: python-pip-app-release
+    preview:
+      pipeline: python-pip-app-preview
+runtime:
+  # Image is used as a base image for your runtime container
+  image: rbcz-codenow-dataplane-oci.artifactory.rb.cz/python:3.12.6-slim-bullseye
+  # Port on which the service will be exposed
+  port: 80
+  endpoints:
+    external:
+      # Expose service to external endpoint
+      enabled: true

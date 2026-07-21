@@ -1,0 +1,16 @@
+# Flask Framework
+Flask==3.0.3
+
+# Linter
+pylint==3.2.3
+
+# Unit tests
+pytest==8.2.2
+coverage==7.5.4
+
+# Waitress
+waitress==3.0.0
+
+requests==2.32.3
+
+python-json-logger==2.0.7
