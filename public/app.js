@@ -1,5 +1,162 @@
 "use strict";
 
+// ---- Theme and language (ported from the Finance RB CZ gateway) ----
+// The theme lives on <html data-theme> and the language on <html lang>; both
+// are resolved before first paint by the inline script in base.html. This
+// file only switches them and remembers an explicit choice.
+
+const THEME_KEY = "leiTheme";
+const LANG_KEY = "leiLang";
+
+// Strings the script writes itself (server-rendered text carries its own
+// data-cs / data-en attributes instead).
+const STRINGS = {
+    en: {
+        needNameOrIsin: "Please enter an entity name or an ISIN",
+        selectFile: "Please select a .xlsx or .csv file",
+        selectFileFirst: "Please select a file first",
+        tooLarge: "That file is too large. The maximum upload size is 4 MB.",
+        couldNotStart: "The search could not be started. Please try again.",
+        unreachable: "Could not reach the server. Please try again.",
+        unreachableResume: "Could not reach the server. Reload the page to resume.",
+        serverFailed: "The search failed on the server.",
+        reloadToResume: "Reload the page to resume.",
+        noFiles: "No files selected yet",
+        removeFile: "Remove file",
+        toDark: "Switch to dark mode",
+        toLight: "Switch to light mode",
+        record: (index, total) => `Record ${index} of ${total}`,
+    },
+    cs: {
+        needNameOrIsin: "Zadejte název subjektu nebo ISIN",
+        selectFile: "Vyberte soubor .xlsx nebo .csv",
+        selectFileFirst: "Nejprve vyberte soubor",
+        tooLarge: "Soubor je příliš velký. Maximální velikost je 4 MB.",
+        couldNotStart: "Vyhledávání se nepodařilo spustit. Zkuste to prosím znovu.",
+        unreachable: "Server není dostupný. Zkuste to prosím znovu.",
+        unreachableResume: "Server není dostupný. Obnovte stránku pro pokračování.",
+        serverFailed: "Vyhledávání na serveru selhalo.",
+        reloadToResume: "Obnovte stránku pro pokračování.",
+        noFiles: "Zatím není vybrán žádný soubor",
+        removeFile: "Odebrat soubor",
+        toDark: "Přepnout na tmavý režim",
+        toLight: "Přepnout na světlý režim",
+        record: (index, total) => `Záznam ${index} z ${total}`,
+    },
+};
+
+// Callbacks that re-render script-written text after a language switch.
+const langListeners = [];
+
+function currentLang() {
+    return document.documentElement.lang === "cs" ? "cs" : "en";
+}
+
+function t(key, ...args) {
+    const value = STRINGS[currentLang()][key];
+    return typeof value === "function" ? value(...args) : value;
+}
+
+function themeIsDark() {
+    return document.documentElement.getAttribute("data-theme") === "dark";
+}
+
+function applyThemeLabel() {
+    const button = document.getElementById("theme-toggle");
+    if (!button) {
+        return;
+    }
+    const text = t(themeIsDark() ? "toLight" : "toDark");
+    button.setAttribute("title", text);
+    button.setAttribute("aria-label", text);
+}
+
+function setTheme(next, remember) {
+    document.documentElement.setAttribute("data-theme", next);
+    if (remember) {
+        try {
+            localStorage.setItem(THEME_KEY, next);
+        } catch (error) {
+            // Storage blocked: the choice simply lasts for this page.
+        }
+    }
+    applyThemeLabel();
+}
+
+// Swap every translated text node and attribute to the current language.
+// Elements carry data-cs / data-en for their text, and data-cs-<attr> /
+// data-en-<attr> for placeholder, title, and aria-label.
+function applyLang() {
+    const lang = currentLang();
+    document.querySelectorAll("[data-cs]").forEach((el) => {
+        const text = el.getAttribute("data-" + lang);
+        if (text !== null) {
+            el.textContent = text;
+        }
+    });
+    ["placeholder", "title", "aria-label"].forEach((attr) => {
+        document.querySelectorAll(`[data-cs-${attr}]`).forEach((el) => {
+            const text = el.getAttribute(`data-${lang}-${attr}`);
+            if (text !== null) {
+                el.setAttribute(attr, text);
+            }
+        });
+    });
+    document.querySelectorAll(".lang-btn").forEach((button) => {
+        const isActive = button.getAttribute("data-setlang") === lang;
+        button.classList.toggle("is-active", isActive);
+        button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+    applyThemeLabel();
+    langListeners.forEach((listener) => listener());
+}
+
+function setLang(next) {
+    document.documentElement.lang = next;
+    try {
+        localStorage.setItem(LANG_KEY, next);
+    } catch (error) {
+        // Storage blocked: the choice simply lasts for this page.
+    }
+    applyLang();
+}
+
+function setupThemeAndLang() {
+    const themeButton = document.getElementById("theme-toggle");
+    if (themeButton) {
+        themeButton.addEventListener("click", () => {
+            setTheme(themeIsDark() ? "light" : "dark", true);
+        });
+    }
+
+    // Until the user makes an explicit choice, keep following the OS.
+    let stored = null;
+    try {
+        stored = localStorage.getItem(THEME_KEY);
+    } catch (error) {
+        stored = null;
+    }
+    if (stored !== "light" && stored !== "dark" && window.matchMedia) {
+        const query = window.matchMedia("(prefers-color-scheme: dark)");
+        query.addEventListener("change", (event) => {
+            setTheme(event.matches ? "dark" : "light", false);
+        });
+    }
+
+    document.querySelectorAll(".lang-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+            setLang(button.getAttribute("data-setlang") === "cs" ? "cs" : "en");
+        });
+    });
+
+    const year = document.getElementById("year");
+    if (year) {
+        year.textContent = String(new Date().getFullYear());
+    }
+
+    applyLang();
+}
+
 // Wire the header buttons to their popups. Each <dialog> closes via its own
 // form method="dialog" (the X button) or by clicking the backdrop.
 function setupDialog(buttonId, dialogId) {
@@ -21,7 +178,7 @@ function setupDialog(buttonId, dialogId) {
 
 // ---- Search-page forms ----
 
-// Show/clear the red validation message that sits next to a Search button.
+// Show/clear the validation message that sits next to a Search button.
 function showFormError(form, message) {
     const errorEl = form.querySelector(".form-error");
     if (errorEl) {
@@ -50,9 +207,7 @@ async function submitSearch(form, formData) {
         // 413 is the size cap rejecting a large upload (Flask's
         // MAX_CONTENT_LENGTH, or Vercel's own request body limit).
         if (response.status === 413) {
-            showFormError(
-                form, "That file is too large. The maximum upload size is 4 MB.",
-            );
+            showFormError(form, t("tooLarge"));
             return;
         }
         let data = null;
@@ -62,17 +217,13 @@ async function submitSearch(form, formData) {
             data = null;
         }
         if (!response.ok || !data || !data.job_id) {
-            showFormError(
-                form,
-                (data && data.error)
-                    || "The search could not be started. Please try again.",
-            );
+            showFormError(form, (data && data.error) || t("couldNotStart"));
             return;
         }
         window.location.href =
             "/results?job=" + encodeURIComponent(data.job_id);
     } catch (error) {
-        showFormError(form, "Could not reach the server. Please try again.");
+        showFormError(form, t("unreachable"));
     } finally {
         if (submitBtn) {
             submitBtn.disabled = false;
@@ -109,7 +260,7 @@ function setupSingleForm() {
         const hasName = nameInput && nameInput.value.trim();
         const hasIsin = isinInput && isinInput.value.trim();
         if (!hasName && !hasIsin) {
-            showFormError(form, "Please enter an entity name or an ISIN");
+            showFormError(form, t("needNameOrIsin"));
             if (nameInput) {
                 nameInput.focus();
             }
@@ -158,7 +309,9 @@ function setupBulkForm() {
         if (!file) {
             const empty = document.createElement("span");
             empty.className = "file-list-empty";
-            empty.textContent = "No files selected yet";
+            empty.setAttribute("data-cs", STRINGS.cs.noFiles);
+            empty.setAttribute("data-en", STRINGS.en.noFiles);
+            empty.textContent = t("noFiles");
             fileItems.appendChild(empty);
             return;
         }
@@ -173,7 +326,9 @@ function setupBulkForm() {
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "file-remove";
-        remove.setAttribute("aria-label", "Remove file");
+        remove.setAttribute("aria-label", t("removeFile"));
+        remove.setAttribute("data-cs-aria-label", STRINGS.cs.removeFile);
+        remove.setAttribute("data-en-aria-label", STRINGS.en.removeFile);
         remove.textContent = "×";
         remove.addEventListener("click", () => {
             fileInput.value = "";
@@ -190,7 +345,7 @@ function setupBulkForm() {
             const file = fileInput.files[0];
             if (file && !isAllowedFile(file)) {
                 fileInput.value = "";
-                showFormError(form, "Please select a .xlsx or .csv file");
+                showFormError(form, t("selectFile"));
             }
             renderFiles();
         });
@@ -217,7 +372,7 @@ function setupBulkForm() {
                 return;
             }
             if (!isAllowedFile(file)) {
-                showFormError(form, "Please select a .xlsx or .csv file");
+                showFormError(form, t("selectFile"));
                 return;
             }
             // Keep the one-file cap: hand only the first dropped file to the
@@ -233,7 +388,7 @@ function setupBulkForm() {
         event.preventDefault();
         const file = fileInput && fileInput.files[0];
         if (!file) {
-            showFormError(form, "Please select a file first");
+            showFormError(form, t("selectFileFirst"));
             return;
         }
         clearFormError(form);
@@ -290,6 +445,9 @@ function showResultsError(els, message) {
     els.card.classList.add("has-error");
     els.card.setAttribute("aria-busy", "false");
     if (els.state) {
+        // Freeze the message: it must not be swapped by a language switch.
+        els.state.removeAttribute("data-cs");
+        els.state.removeAttribute("data-en");
         els.state.textContent = message;
     }
 }
@@ -306,10 +464,7 @@ async function runJob(jobId) {
         try {
             response = await fetch(url, { method: "POST" });
         } catch (error) {
-            showResultsError(
-                els,
-                "Could not reach the server. Reload the page to resume.",
-            );
+            showResultsError(els, t("unreachableResume"));
             return;
         }
 
@@ -326,9 +481,8 @@ async function runJob(jobId) {
         // fetch() only rejects on a network failure, not on a 4xx/5xx status,
         // so check the status ourselves to report a server error as one.
         if (!response.ok || !data) {
-            const reason = (data && data.error)
-                || "The search failed on the server.";
-            showResultsError(els, reason + " Reload the page to resume.");
+            const reason = (data && data.error) || t("serverFailed");
+            showResultsError(els, reason + " " + t("reloadToResume"));
             return;
         }
 
@@ -387,6 +541,12 @@ function setupValidation() {
         }
     }
 
+    function updatePosition() {
+        if (positionEl) {
+            positionEl.textContent = t("record", current + 1, records.length);
+        }
+    }
+
     // Highlight a record's saved choice: the chosen candidate row, or
     // the "None of these" button. Also used to restore state on load.
     function paintDecision(record) {
@@ -424,10 +584,7 @@ function setupValidation() {
                 direction === "prev" ? "slide-left" : "slide-right",
             );
         }
-        if (positionEl) {
-            positionEl.textContent =
-                `Record ${current + 1} of ${records.length}`;
-        }
+        updatePosition();
         if (prevBtn) {
             prevBtn.disabled = current === 0;
         }
@@ -501,6 +658,7 @@ function setupValidation() {
     const firstUndecided = records.findIndex((record) => !isDecided(record));
     updateCounter();
     show(firstUndecided === -1 ? 0 : firstUndecided, null);
+    langListeners.push(updatePosition);
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -510,4 +668,6 @@ document.addEventListener("DOMContentLoaded", () => {
     setupBulkForm();
     initResultsPage();
     setupValidation();
+    // Last: translates everything the setups above rendered.
+    setupThemeAndLang();
 });

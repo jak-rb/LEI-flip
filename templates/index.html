@@ -7,57 +7,91 @@
 
 
 {% block body %}
+<section class="masthead">
+    <span class="kicker" data-cs="Interní nástroje" data-en="Internal tools">Internal tools</span>
+    <h1>
+        <span data-cs="Najděte firemní" data-en="Find a company's">Find a company's</span>
+        <strong class="marker">LEI</strong>
+    </h1>
+    <p class="hero-sub"
+       data-cs="Prohledejte databázi GLEIF podle názvu nebo ISIN - jednotlivě, nebo celý soubor najednou."
+       data-en="Search the GLEIF database by name or ISIN - one entity at a time, or a whole file at once.">Search the GLEIF database by name or ISIN - one entity at a time, or a whole file at once.</p>
+</section>
+
 <div class="lookup-container">
 
     <!-- Single entity lookup -->
     <section class="card">
-        <h2 class="card-title">Single lookup</h2>
-        <ul class="card-subtitle">
-            <li><strong>Enter a name or an ISIN</strong> (other fields improve the results)</li>
-        </ul>
+        <div class="lookup-card-top">
+            <span class="lookup-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.7" stroke-linecap="round">
+                    <circle cx="10.5" cy="10.5" r="6.5"></circle>
+                    <path d="m16 16 5 5"></path>
+                </svg>
+            </span>
+            <span class="lookup-tag" data-cs="Jeden subjekt"
+                  data-en="One entity">One entity</span>
+        </div>
+        <h2 class="card-title" data-cs="Jednotlivé vyhledání" data-en="Single lookup">Single lookup</h2>
+        <p class="card-subtitle"
+           data-cs="Zadejte název nebo ISIN. Adresa pomůže zpřesnit výsledek."
+           data-en="Enter a name or ISIN. Add an address for a more precise result.">Enter a name or ISIN. Add an address for a more precise result.</p>
 
         <form class="lookup-form" novalidate>
             <div class="field-row">
                 <div class="field">
-                    <label for="entity_name">Entity name</label>
+                    <label for="entity_name" data-cs="Název subjektu" data-en="Entity name">Entity name</label>
                     <input type="text" id="entity_name" name="entity_name"
-                           placeholder="e.g. CAIAC Fund Management AG">
+                           placeholder="e.g. CAIAC Fund Management AG"
+                           data-cs-placeholder="např. CAIAC Fund Management AG"
+                           data-en-placeholder="e.g. CAIAC Fund Management AG">
                 </div>
                 <div class="field">
                     <label for="isin">ISIN</label>
                     <input type="text" id="isin" name="isin"
-                           placeholder="e.g. CZ0009010468">
+                           placeholder="e.g. CZ0009010468"
+                           data-cs-placeholder="např. CZ0009010468"
+                           data-en-placeholder="e.g. CZ0009010468">
                 </div>
             </div>
 
             <div class="field-row">
                 <div class="field">
-                    <label for="country">Country</label>
+                    <label for="country" data-cs="Země" data-en="Country">Country</label>
                     <input type="text" id="country" name="country"
-                           placeholder="e.g. Czech Republic">
+                           placeholder="e.g. Czech Republic"
+                           data-cs-placeholder="např. Česká republika"
+                           data-en-placeholder="e.g. Czech Republic">
                 </div>
                 <div class="field">
-                    <label for="city">City</label>
+                    <label for="city" data-cs="Město" data-en="City">City</label>
                     <input type="text" id="city" name="city"
-                           placeholder="e.g. Prague">
+                           placeholder="e.g. Prague"
+                           data-cs-placeholder="např. Praha"
+                           data-en-placeholder="e.g. Prague">
                 </div>
             </div>
 
             <div class="field-row">
                 <div class="field">
-                    <label for="street">Street</label>
+                    <label for="street" data-cs="Ulice" data-en="Street">Street</label>
                     <input type="text" id="street" name="street"
-                           placeholder="e.g. Kotrcova 304/2">
+                           placeholder="e.g. Kotrcova 304/2"
+                           data-cs-placeholder="např. Kotrčova 304/2"
+                           data-en-placeholder="e.g. Kotrcova 304/2">
                 </div>
                 <div class="field">
-                    <label for="postal_code">Postal code</label>
+                    <label for="postal_code" data-cs="PSČ" data-en="Postal code">Postal code</label>
                     <input type="text" id="postal_code" name="postal_code"
-                           placeholder="e.g. 13000">
+                           placeholder="e.g. 13000"
+                           data-cs-placeholder="např. 13000"
+                           data-en-placeholder="e.g. 13000">
                 </div>
             </div>
 
             <div class="form-footer">
-                <button type="submit" class="btn btn-primary">Search</button>
+                <button type="submit" class="btn btn-primary" data-cs="Hledat" data-en="Search">Search</button>
                 <span class="form-error" role="alert"></span>
             </div>
         </form>
@@ -65,33 +99,56 @@
 
     <!-- Bulk file lookup -->
     <section class="card">
-        <h2 class="card-title">Bulk lookup</h2>
-        <ul class="card-subtitle">
-            <li><strong>Enter a name or an ISIN</strong> (other fields improve the results)</li>
-            <li><strong>Column order:</strong> Name, ISIN, Country, City,
-                Street, Postal code</li>
-        </ul>
+        <div class="lookup-card-top">
+            <span class="lookup-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.7" stroke-linejoin="round">
+                    <path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6M9 16h6"></path>
+                </svg>
+            </span>
+            <span class="lookup-tag" data-cs="Až 100 subjektů"
+                  data-en="Up to 100 entities">Up to 100 entities</span>
+        </div>
+        <h2 class="card-title" data-cs="Hromadné vyhledání" data-en="Bulk lookup">Bulk lookup</h2>
+        <p class="card-subtitle"
+           data-cs="Nahrajte seznam subjektů. U každého vyplňte název nebo ISIN."
+           data-en="Upload your entity list. Include a name or ISIN for each row.">Upload your entity list. Include a name or ISIN for each row.</p>
+        <p class="column-guide">
+            <strong data-cs="Pořadí sloupců" data-en="Column order">Column order</strong>
+            <span data-cs="Název · ISIN · Země · Město · Ulice · PSČ"
+                  data-en="Name · ISIN · Country · City · Street · Postal code">Name · ISIN · Country · City · Street · Postal code</span>
+        </p>
 
         <form class="upload-form">
             <label for="file_upload" class="dropzone">
-                <span class="dropzone-icon">&#8593;</span>
+                <span class="dropzone-icon" aria-hidden="true">&#8593;</span>
                 <span class="dropzone-text">
-                    Drag <strong>.xlsx</strong> or <strong>.csv</strong> files here
+                    <span data-cs="Přetáhněte sem soubor" data-en="Drag a">Drag a</span>
+                    <strong>.xlsx</strong>
+                    <span data-cs="nebo" data-en="or">or</span>
+                    <strong>.csv</strong>
+                    <span data-cs="" data-en="file here">file here</span>
                 </span>
-                <span class="dropzone-hint">or click to select</span>
+                <span class="dropzone-hint" data-cs="nebo klikněte pro výběr" data-en="or click to select">or click to select</span>
                 <input type="file" id="file_upload" name="file_upload"
-                       accept=".xlsx,.csv" hidden>
+                       accept=".xlsx,.csv" class="file-input">
             </label>
+
+            <p class="upload-limits"
+               data-cs="Jeden soubor, až 100 subjektů. Maximální velikost 4 MB."
+               data-en="One file, up to 100 entities. Maximum size 4 MB.">One file, up to 100 entities. Maximum size 4 MB.</p>
 
             <div class="file-list">
                 <span class="file-count">0/1</span>
                 <div class="file-list-items">
-                    <span class="file-list-empty">No files selected yet</span>
+                    <span class="file-list-empty"
+                          data-cs="Zatím není vybrán žádný soubor"
+                          data-en="No files selected yet">No files selected yet</span>
                 </div>
             </div>
 
             <div class="form-footer">
-                <button type="submit" class="btn btn-primary">Search</button>
+                <button type="submit" class="btn btn-primary" data-cs="Hledat" data-en="Search">Search</button>
                 <span class="form-error" role="alert"></span>
             </div>
         </form>

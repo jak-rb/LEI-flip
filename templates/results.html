@@ -4,13 +4,12 @@
 {% block body %}
 <div class="results-page">
     {% if not search %}
-    <p class="results-page-note">
-        No results to show. This link may have expired (saved results are
-        kept for 30 days), or no search has been run yet.
-    </p>
+    <p class="results-page-note"
+       data-cs="Žádné výsledky k zobrazení. Odkaz mohl vypršet (výsledky uchováváme 30 dní), nebo zatím neproběhlo žádné vyhledávání."
+       data-en="No results to show. This link may have expired (saved results are kept for 30 days), or no search has been run yet.">No results to show. This link may have expired (saved results are kept for 30 days), or no search has been run yet.</p>
     <p>
         <a class="btn btn-result btn-detailed" href="{{ url_for('index') }}">
-            &larr; Back to search
+            &larr; <span data-cs="Zpět na vyhledávání" data-en="Back to search">Back to search</span>
         </a>
     </p>
     {% else %}
@@ -19,10 +18,20 @@
     {% set matched_count = progress.matched if running else groups.matched_count %}
     {% set validate_count = progress.need_validation if running else groups.need_validation_count %}
     {% set unmatched_count = progress.unmatched if running else groups.unmatched_count %}
+    {% set states = {
+        'running': ('Searching…', 'Vyhledávám…'),
+        'review': ('Needs review', 'Vyžaduje kontrolu'),
+        'none': ('No matches found', 'Nenalezeny žádné shody'),
+        'complete': ('Search complete', 'Vyhledávání dokončeno'),
+    } %}
+    {% if running %}{% set state = 'running' %}
+    {% elif matched_count == 0 and validate_count > 0 %}{% set state = 'review' %}
+    {% elif matched_count == 0 %}{% set state = 'none' %}
+    {% else %}{% set state = 'complete' %}{% endif %}
 
     <!-- Summary card: "Back to search" on the left, downloads on the right.
          While the job is still being looked up it shows live progress
-         (driven by static/app.js); a finished job renders its final counts. -->
+         (driven by app.js); a finished job renders its final counts. -->
     <section id="results-card"
              class="results-card{% if running %} is-running{% elif matched_count == 0 %} no-matches{% endif %}"
              data-job="{{ search.job_id }}"
@@ -30,67 +39,73 @@
              aria-busy="{{ 'true' if running else 'false' }}">
         <div class="results-status">
             <span class="spinner" aria-hidden="true"></span>
-            <span class="results-state-text" role="status">{% if running %}Searching…{% elif matched_count == 0 and validate_count > 0 %}Needs review{% elif matched_count == 0 %}No matches found{% else %}Search complete{% endif %}</span>
+            <span class="results-state-text" role="status"
+                  data-en="{{ states[state][0] }}"
+                  data-cs="{{ states[state][1] }}">{{ states[state][0] }}</span>
         </div>
 
         <div class="results-metrics">
             <div class="metric metric-searched">
-                <span class="metric-label">Searched</span>
+                <span class="metric-label" data-cs="Prohledáno" data-en="Searched">Searched</span>
                 <span class="metric-value" id="metric-searched">{{ progress.searched }} / {{ progress.total }}</span>
             </div>
             <div class="metric metric-matched">
-                <span class="metric-label">Matched</span>
+                <span class="metric-label" data-cs="Spárováno" data-en="Matched">Matched</span>
                 <span class="metric-value" id="metric-matched">{{ matched_count }}</span>
             </div>
             <div class="metric metric-validate">
-                <span class="metric-label">Need validation</span>
+                <span class="metric-label" data-cs="K ověření" data-en="Need validation">Need validation</span>
                 <span class="metric-value" id="metric-validate">{{ validate_count }}</span>
             </div>
             <div class="metric metric-unmatched">
-                <span class="metric-label">Unmatched</span>
+                <span class="metric-label" data-cs="Nespárováno" data-en="Unmatched">Unmatched</span>
                 <span class="metric-value" id="metric-unmatched">{{ unmatched_count }}</span>
             </div>
         </div>
 
         <div class="results-actions results-actions-split">
             <a class="btn btn-result btn-detailed" href="{{ url_for('index') }}">
-                &larr; Back to search
+                &larr; <span data-cs="Zpět na vyhledávání" data-en="Back to search">Back to search</span>
             </a>
             <div class="download-group">
                 {% if running %}
-                <button type="button" class="btn btn-result" disabled>Download CSV</button>
-                <button type="button" class="btn btn-result" disabled>Download Excel</button>
+                <button type="button" class="btn btn-result" disabled
+                        data-cs="Stáhnout CSV" data-en="Download CSV">Download CSV</button>
+                <button type="button" class="btn btn-result" disabled
+                        data-cs="Stáhnout Excel" data-en="Download Excel">Download Excel</button>
                 {% else %}
                 <a class="btn btn-result"
-                   href="{{ url_for('download_csv') }}?job={{ search.job_id }}">
-                    Download CSV
-                </a>
+                   href="{{ url_for('download_csv') }}?job={{ search.job_id }}"
+                   data-cs="Stáhnout CSV" data-en="Download CSV">Download CSV</a>
                 <a class="btn btn-result"
-                   href="{{ url_for('download_excel') }}?job={{ search.job_id }}">
-                    Download Excel
-                </a>
+                   href="{{ url_for('download_excel') }}?job={{ search.job_id }}"
+                   data-cs="Stáhnout Excel" data-en="Download Excel">Download Excel</a>
                 {% endif %}
             </div>
         </div>
     </section>
 
     {% if not running %}
-    <h2 class="results-page-title">Detailed results</h2>
+    <h2 class="results-page-title" data-cs="Podrobné výsledky" data-en="Detailed results">Detailed results</h2>
 
     <!-- Validation stepper: one near-miss record at a time. The heading
          counts how many records still need a decision. -->
     {% if groups.to_validate %}
     <h3 class="zone-title zone-validate">
-        To validate (<span class="validate-remaining">{{
-            groups.need_validation_count }}</span>)
+        <span data-cs="K ověření" data-en="To validate">To validate</span>
+        (<span class="validate-remaining">{{ groups.need_validation_count }}</span>)
     </h3>
     <section class="validation" data-job="{{ search.job_id }}">
         <div class="validation-nav">
             <button type="button" class="validation-prev"
-                    aria-label="Previous record">&larr;</button>
+                    aria-label="Previous record"
+                    data-cs-aria-label="Předchozí záznam"
+                    data-en-aria-label="Previous record">&larr;</button>
             <span class="validation-position"></span>
             <button type="button" class="validation-next"
-                    aria-label="Next record">&rarr;</button>
+                    aria-label="Next record"
+                    data-cs-aria-label="Další záznam"
+                    data-en-aria-label="Next record">&rarr;</button>
         </div>
 
         {% for rec in groups.to_validate %}
@@ -101,7 +116,7 @@
                                  and rec.decision.status == 'confirmed'
                                  else '' }}">
             <p class="detail-searched">
-                You searched:
+                <span data-cs="Hledali jste:" data-en="You searched:">You searched:</span>
                 <strong>{{ rec.input.name or rec.input.isin }}</strong>
                 {% if rec.input.country or rec.input.city %}
                 ({{ rec.input.country }}{% if rec.input.city %},
@@ -114,12 +129,12 @@
                     <thead>
                         <tr>
                             <th class="col-expand"></th>
-                            <th>Legal name</th>
-                            <th>Country</th>
-                            <th>City</th>
-                            <th>Street</th>
+                            <th data-cs="Právní název" data-en="Legal name">Legal name</th>
+                            <th data-cs="Země" data-en="Country">Country</th>
+                            <th data-cs="Město" data-en="City">City</th>
+                            <th data-cs="Ulice" data-en="Street">Street</th>
                             <th>GLEIF</th>
-                            <th class="col-overall">Overall match</th>
+                            <th class="col-overall" data-cs="Celková shoda" data-en="Overall match">Overall match</th>
                             <th class="col-confirm"></th>
                         </tr>
                     </thead>
@@ -129,7 +144,9 @@
                             <td class="col-expand">
                                 <button type="button" class="candidate-expand"
                                         aria-expanded="false"
-                                        aria-label="More details">
+                                        aria-label="More details"
+                                        data-cs-aria-label="Více podrobností"
+                                        data-en-aria-label="More details">
                                     <span class="chevron" aria-hidden="true"></span>
                                 </button>
                             </td>
@@ -140,12 +157,14 @@
                             <td>
                                 <a class="gleif-link"
                                    href="https://search.gleif.org/#/record/{{ c.lei }}"
-                                   target="_blank" rel="noopener">View &#8599;</a>
+                                   target="_blank" rel="noopener"
+                                   data-cs="Zobrazit ↗" data-en="View ↗">View &#8599;</a>
                             </td>
                             <td class="col-overall">{{ c.overall|round|int }}%</td>
                             <td class="col-confirm">
                                 <button type="button"
-                                        class="btn candidate-confirm">
+                                        class="btn candidate-confirm"
+                                        data-cs="Správná shoda" data-en="Correct match">
                                     Correct match
                                 </button>
                             </td>
@@ -155,17 +174,17 @@
                                 <dl class="candidate-detail-fields">
                                     <dt>LEI</dt>
                                     <dd class="cell-lei">{{ c.lei }}</dd>
-                                    <dt>Status</dt><dd>{{ c.status }}</dd>
-                                    <dt>Legal address</dt>
+                                    <dt data-cs="Stav" data-en="Status">Status</dt><dd>{{ c.status }}</dd>
+                                    <dt data-cs="Sídlo" data-en="Legal address">Legal address</dt>
                                     <dd>{{ c.legal_address or "-" }}</dd>
-                                    <dt>HQ address</dt>
+                                    <dt data-cs="Adresa centrály" data-en="HQ address">HQ address</dt>
                                     <dd>{{ c.hq_address or "-" }}</dd>
-                                    <dt>Field scores</dt>
+                                    <dt data-cs="Skóre polí" data-en="Field scores">Field scores</dt>
                                     <dd>
-                                        Name {{ c.name_score }} &middot;
-                                        City {{ c.city_score }} &middot;
-                                        Street {{ c.street_score }} &middot;
-                                        ZIP {{ c.zip_score }}
+                                        <span data-cs="Název" data-en="Name">Name</span> {{ c.name_score }} &middot;
+                                        <span data-cs="Město" data-en="City">City</span> {{ c.city_score }} &middot;
+                                        <span data-cs="Ulice" data-en="Street">Street</span> {{ c.street_score }} &middot;
+                                        <span data-cs="PSČ" data-en="ZIP">ZIP</span> {{ c.zip_score }}
                                     </dd>
                                 </dl>
                             </td>
@@ -176,7 +195,8 @@
             </div>
 
             <div class="validate-actions">
-                <button type="button" class="btn validate-none">
+                <button type="button" class="btn validate-none"
+                        data-cs="Žádný z nich" data-en="None of these">
                     None of these
                 </button>
             </div>
@@ -186,19 +206,19 @@
     {% endif %}
 
     <!-- Matched records -->
-    <h3 class="zone-title zone-matched">Matched records</h3>
+    <h3 class="zone-title zone-matched" data-cs="Spárované záznamy" data-en="Matched records">Matched records</h3>
     {% if groups.matched %}
     <div class="results-table-wrap">
         <table class="results-table table-matched">
             <thead>
                 <tr>
-                    <th>Searched name</th>
-                    <th>Legal name</th>
-                    <th>Country</th>
-                    <th>City</th>
-                    <th>Street</th>
+                    <th data-cs="Hledaný název" data-en="Searched name">Searched name</th>
+                    <th data-cs="Právní název" data-en="Legal name">Legal name</th>
+                    <th data-cs="Země" data-en="Country">Country</th>
+                    <th data-cs="Město" data-en="City">City</th>
+                    <th data-cs="Ulice" data-en="Street">Street</th>
                     <th>GLEIF</th>
-                    <th>Overall match</th>
+                    <th data-cs="Celková shoda" data-en="Overall match">Overall match</th>
                 </tr>
             </thead>
             <tbody>
@@ -212,7 +232,8 @@
                     <td>
                         <a class="gleif-link"
                            href="https://search.gleif.org/#/record/{{ m.lei }}"
-                           target="_blank" rel="noopener">View &#8599;</a>
+                           target="_blank" rel="noopener"
+                           data-cs="Zobrazit ↗" data-en="View ↗">View &#8599;</a>
                     </td>
                     <td>
                         {% if m.overall is not none %}
@@ -225,20 +246,20 @@
         </table>
     </div>
     {% else %}
-    <p class="results-page-note">No matched records.</p>
+    <p class="results-page-note" data-cs="Žádné spárované záznamy." data-en="No matched records.">No matched records.</p>
     {% endif %}
 
     <!-- No matches -->
-    <h3 class="zone-title zone-nomatch">No matches</h3>
+    <h3 class="zone-title zone-nomatch" data-cs="Bez shody" data-en="No matches">No matches</h3>
     {% if groups.no_match %}
     <div class="results-table-wrap">
         <table class="results-table table-nomatch">
             <thead>
                 <tr>
-                    <th>Searched name</th>
-                    <th>Country</th>
-                    <th>City</th>
-                    <th>Notes</th>
+                    <th data-cs="Hledaný název" data-en="Searched name">Searched name</th>
+                    <th data-cs="Země" data-en="Country">Country</th>
+                    <th data-cs="Město" data-en="City">City</th>
+                    <th data-cs="Poznámky" data-en="Notes">Notes</th>
                 </tr>
             </thead>
             <tbody>
@@ -254,7 +275,7 @@
         </table>
     </div>
     {% else %}
-    <p class="results-page-note">No unmatched records.</p>
+    <p class="results-page-note" data-cs="Žádné nespárované záznamy." data-en="No unmatched records.">No unmatched records.</p>
     {% endif %}
     {% endif %}
     {% endif %}

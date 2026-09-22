@@ -3,41 +3,93 @@
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="color-scheme" content="light dark">
         <title>LEI lookup</title>
-        <link rel="stylesheet" href="{{url_for('static', filename = 'styles.css')}}">
+        <script>
+        /* Resolve the theme and language before first paint: an explicit
+           choice wins, otherwise the OS colour scheme and English. Runs in
+           <head> so there is no light-then-dark flash; moving it into app.js
+           (which loads defer) brings the flash back. */
+        (function () {
+            var theme, lang;
+            try {
+                theme = localStorage.getItem("leiTheme");
+                lang = localStorage.getItem("leiLang");
+            } catch (err) { /* storage blocked: fall through to defaults */ }
+            if (theme !== "light" && theme !== "dark") {
+                theme = window.matchMedia
+                    && window.matchMedia("(prefers-color-scheme: dark)").matches
+                    ? "dark" : "light";
+            }
+            document.documentElement.setAttribute("data-theme", theme);
+            if (lang === "cs" || lang === "en") {
+                document.documentElement.lang = lang;
+            }
+        }());
+        </script>
+        <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
         {% block head %}{% endblock %}
     </head>
     <body>
-        <header class="site-header">
+        <header class="topbar">
             <div class="brand">
-                <span class="brand-name">LEI lookup</span>
-                <span class="brand-tagline">A tool for searching the GLEIF database</span>
+                <img class="brand-logo brand-logo-light"
+                     src="{{ url_for('static', filename='img/brand/logo-on-yellow-2x.png') }}"
+                     alt="Raiffeisenbank">
+                <img class="brand-logo brand-logo-dark"
+                     src="{{ url_for('static', filename='img/brand/logo-on-black-2x.png') }}"
+                     alt="Raiffeisenbank">
+                <span class="brand-divider" aria-hidden="true"></span>
+                <a class="brand-text" href="{{ url_for('index') }}">
+                    <strong>LEI lookup</strong>
+                    <small data-cs="Vyhledávání v GLEIF" data-en="GLEIF lookup">GLEIF lookup</small>
+                </a>
             </div>
-            <nav class="header-actions">
-                <button type="button" id="help-btn" class="btn btn-help"
-                        title="Help" aria-label="Help">?</button>
-                <button type="button" id="report-btn" class="btn btn-report">Report bugs</button>
+            <nav class="topbar-tools" aria-label="Tools">
+                <button type="button" id="help-btn" class="topbar-ctl topbar-ctl-help"
+                        title="Help" aria-label="Help"
+                        data-cs-title="Nápověda" data-en-title="Help">?</button>
+                <button type="button" id="report-btn" class="topbar-ctl"
+                        data-cs="Nahlásit chybu" data-en="Report bugs">Report bugs</button>
+                <button type="button" class="theme-btn" id="theme-toggle">
+                    <img class="theme-icon theme-icon-to-dark"
+                         src="{{ url_for('static', filename='img/icons/moon.png') }}" alt="">
+                    <img class="theme-icon theme-icon-to-light"
+                         src="{{ url_for('static', filename='img/icons/sun.png') }}" alt="">
+                </button>
+                <div class="lang-switch" role="group" aria-label="Language">
+                    <button type="button" class="lang-btn" data-setlang="cs" aria-pressed="false">CZ</button>
+                    <button type="button" class="lang-btn is-active" data-setlang="en" aria-pressed="true">EN</button>
+                </div>
             </nav>
         </header>
 
         <main class="page-content">
             <noscript>
                 <p class="noscript-banner">
-                    LEI lookup needs JavaScript to run. Please enable it in your
-                    browser and reload the page.
+                    <span class="only-en">LEI lookup needs JavaScript to run. Please enable it in your
+                    browser and reload the page.</span>
+                    <span class="only-cs">LEI lookup ke svému běhu potřebuje JavaScript. Povolte jej
+                    prosím v prohlížeči a obnovte stránku.</span>
                 </p>
             </noscript>
             {% block body %}{% endblock %}
         </main>
 
+        <footer>
+            <span class="copyright">&copy; <span id="year">2026</span> Raiffeisenbank</span>
+        </footer>
+
         <!-- Help popup -->
         <dialog id="help-dialog" class="dialog">
             <form method="dialog">
                 <div class="dialog-header">
-                    <h2 class="dialog-title">How to use LEI lookup</h2>
+                    <h2 class="dialog-title"
+                        data-cs="Jak používat LEI lookup"
+                        data-en="How to use LEI lookup">How to use LEI lookup</h2>
                     <button type="submit" class="dialog-close" aria-label="Close">&times;</button>
                 </div>
-                <div class="dialog-body">
+                <div class="dialog-body only-en">
                     <p>LEI lookup finds a company's Legal Entity Identifier (LEI)
                        in the <a href="https://www.gleif.org/" target="_blank"
                        rel="noopener">GLEIF</a> database. If a search by ISIN
@@ -79,6 +131,47 @@
                             Excel downloads.</li>
                     </ol>
                 </div>
+                <div class="dialog-body only-cs">
+                    <p>LEI lookup vyhledá identifikátor právnické osoby (LEI)
+                       v databázi <a href="https://www.gleif.org/" target="_blank"
+                       rel="noopener">GLEIF</a>. Pokud se ISIN v GLEIF nenajde
+                       přímo, nástroj dohledá emitenta podle názvu přes
+                       <strong>OpenFIGI</strong> (bezplatnou službu Bloombergu).</p>
+
+                    <h3 class="dialog-subtitle">Jednotlivé vyhledání</h3>
+                    <ol class="dialog-steps">
+                        <li>Zadejte <strong>název subjektu</strong> nebo
+                            <strong>ISIN</strong> (alespoň jedno; obojí nebo
+                            doplněná adresa výsledek zpřesní).</li>
+                        <li>Volitelně doplňte zemi, město, ulici nebo PSČ.</li>
+                        <li>Klikněte na <strong>Hledat</strong>.</li>
+                    </ol>
+
+                    <h3 class="dialog-subtitle">Hromadné vyhledání</h3>
+                    <ol class="dialog-steps">
+                        <li>Připravte soubor <strong>.xlsx</strong> nebo
+                            <strong>.csv</strong>, jeden subjekt na řádek, každý
+                            s názvem nebo ISIN. Pořadí sloupců (názvy záhlaví
+                            nerozhodují): Název, ISIN, Země, Město, Ulice, PSČ.</li>
+                        <li>Přetáhněte soubor do nahrávací oblasti, nebo jej
+                            vyberte kliknutím.</li>
+                        <li>Klikněte na <strong>Hledat</strong>.</li>
+                    </ol>
+
+                    <h3 class="dialog-subtitle">Výběr správné shody</h3>
+                    <p>Každý hledaný subjekt skončí v jedné skupině:
+                       <strong>Spárováno</strong> (spolehlivé LEI),
+                       <strong>K ověření</strong>, nebo
+                       <strong>Nespárováno</strong>.</p>
+                    <ol class="dialog-steps">
+                        <li>U každého subjektu k ověření nástroj vypíše
+                            nejbližší nalezené kandidáty. U správného klikněte
+                            na <strong>Správná shoda</strong>, nebo na
+                            <strong>Žádný z nich</strong>, pokud nesedí žádný.</li>
+                        <li>Vaše volby se uloží a promítnou do exportů CSV
+                            a Excel.</li>
+                    </ol>
+                </div>
             </form>
         </dialog>
 
@@ -86,11 +179,14 @@
         <dialog id="report-dialog" class="dialog">
             <form method="dialog">
                 <div class="dialog-header">
-                    <h2 class="dialog-title">Report a bug</h2>
+                    <h2 class="dialog-title"
+                        data-cs="Nahlásit chybu"
+                        data-en="Report a bug">Report a bug</h2>
                     <button type="submit" class="dialog-close" aria-label="Close">&times;</button>
                 </div>
                 <div class="dialog-body">
-                    <p>Found a problem? Please get in touch:</p>
+                    <p data-cs="Narazili jste na problém? Ozvěte se:"
+                       data-en="Found a problem? Please get in touch:">Found a problem? Please get in touch:</p>
                     <ul class="dialog-contacts">
                         <li>Jakub Schrimpel -
                             <a href="mailto:Jakub.Schrimpel@rb.cz">Jakub.Schrimpel@rb.cz</a></li>
@@ -101,6 +197,6 @@
             </form>
         </dialog>
 
-        <script src="{{ url_for('static', filename='app.js') }}"></script>
+        <script src="{{ url_for('static', filename='app.js') }}" defer></script>
     </body>
 </html>

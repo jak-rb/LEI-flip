@@ -1,940 +1,968 @@
-/* ---- Base ---- */
-* {
-    box-sizing: border-box;
+/* LEI lookup - visual system ported from the Finance RB CZ application
+   gateway (anorfidien/finance_rb_cz), which follows the Raiffeisenbank
+   Brand manual 2023. Rules that are easy to break by accident:
+   - ONE yellow only: Primary Yellow #FEE600, tinted by opacity where a
+     lighter value is needed. Yellow 1/2/3 are deliberately unused.
+   - The light theme is intentionally dim: contrast is lowered by darkening
+     the background, never by greying the text (body copy stays Off Black).
+   - Logo: Off Black logo on the yellow bar (light), yellow logo on the Off
+     Black bar (dark). Set width, leave height auto, never crop/recolour.
+   - No webfonts, no CDN, no icon font: system font stack only.
+   Semantic colours come from the brand palette too: Green 3/2 for matched,
+   Primary Yellow for "needs validation", Coral 3/2 for unmatched, Purple for
+   focus rings. */
+
+:root {
+  color-scheme: light;
+  /* RB brand palette (only these swatches; neutrals are mixes of Off Black
+     + Warm Grey):  Off Black 2B2D33 · Warm Grey F1EDE6 · Warm Grey 50% F8F6F2
+     Primary Yellow FEE600 · Coral 1 FFB9A5 · Coral 2 FF8B6B · Coral 3 C65C4A
+     Green 1 A3E2CC · Green 2 67D0AB · Green 3 225B45
+     Purple 9D88D9 · Purple 2 6A4CAD · Purple 3 412F59 */
+  --bg: #e3ddd1;
+  --surface: #f1ede6;
+  --fg: #2b2d33;
+  --muted: #646568;
+  --faint: #878789;
+  --line: #d3cec4;
+  --hairline: #e0dbd0;
+  --tile: rgba(254, 230, 0, 0.18);
+  --accent: #fee600;
+  --accent-strong: #fee600;
+  --accent-fg: #2b2d33;
+  --focus: #6a4cad;
+  /* Outcome colours + opaque tints (opaque so sticky table cells stay
+     solid when a long row scrolls under them). */
+  --ok: #225b45;
+  --ok-bg: #d8dcd3;
+  --warn: #fee600;
+  --warn-bg: #f3ecbd;
+  --bad: #c65c4a;
+  --bad-bg: #ecdcd3;
+  --shadow: 0 6px 16px rgba(43, 45, 51, 0.09);
+  --topbar-bg: #fee600;
+  --topbar-fg: #2b2d33;
+  --topbar-fg-muted: rgba(43, 45, 51, 0.68);
+  --topbar-line: rgba(43, 45, 51, 0.24);
+  --topbar-ctl-hover: rgba(43, 45, 51, 0.5);
+  --topbar-active-bg: #2b2d33;
+  --topbar-active-fg: #fee600;
+  /* Chevron page texture traced from the brand wallpapers (decoration,
+     not the logo). Copied verbatim from the gateway; encoding it twice
+     turns the chevrons black. */
+  --pattern: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2284%22%20height%3D%22118%22%20viewBox%3D%220%200%2084%20118%22%3E%3Cg%20fill%3D%22%23fee600%22%20fill-opacity%3D%220.12%22%3E%3Cpath%20transform%3D%22translate(6%2C6)%20scale(0.22)%20matrix(1%200%200%20-1%200%20149)%22%20d%3D%22M0.15161%2015.8471%2058.444%2074.4788%200%20133.353%2012.6695%20145.657C15.1397%20147.843%2019.8822%20149%2023.3646%20148.887%2026.8471%20148.775%2029.7882%20148.124%2033.5643%20144.981L104%2074.3521%2034.4195%204.81387C31.706%202.66669%2028.7301%200.152799%2023.6415%200.0763993%2018.553%200%2014.1163%202.03967%2011.6779%204.35553L0.15161%2015.8471Z%22%2F%3E%3Cpath%20transform%3D%22translate(6%2C65)%20scale(0.22)%20matrix(1%200%200%20-1%200%20149)%22%20d%3D%22M0.15161%2015.8471%2058.444%2074.4788%200%20133.353%2012.6695%20145.657C15.1397%20147.843%2019.8822%20149%2023.3646%20148.887%2026.8471%20148.775%2029.7882%20148.124%2033.5643%20144.981L104%2074.3521%2034.4195%204.81387C31.706%202.66669%2028.7301%200.152799%2023.6415%200.0763993%2018.553%200%2014.1163%202.03967%2011.6779%204.35553L0.15161%2015.8471Z%22%2F%3E%3Cpath%20transform%3D%22translate(48%2C-23.5)%20scale(0.22)%20matrix(-1%200%200%20-1%20104%20149)%22%20d%3D%22M0.15161%2015.8471%2058.444%2074.4788%200%20133.353%2012.6695%20145.657C15.1397%20147.843%2019.8822%20149%2023.3646%20148.887%2026.8471%20148.775%2029.7882%20148.124%2033.5643%20144.981L104%2074.3521%2034.4195%204.81387C31.706%202.66669%2028.7301%200.152799%2023.6415%200.0763993%2018.553%200%2014.1163%202.03967%2011.6779%204.35553L0.15161%2015.8471Z%22%2F%3E%3Cpath%20transform%3D%22translate(48%2C35.5)%20scale(0.22)%20matrix(-1%200%200%20-1%20104%20149)%22%20d%3D%22M0.15161%2015.8471%2058.444%2074.4788%200%20133.353%2012.6695%20145.657C15.1397%20147.843%2019.8822%20149%2023.3646%20148.887%2026.8471%20148.775%2029.7882%20148.124%2033.5643%20144.981L104%2074.3521%2034.4195%204.81387C31.706%202.66669%2028.7301%200.152799%2023.6415%200.0763993%2018.553%200%2014.1163%202.03967%2011.6779%204.35553L0.15161%2015.8471Z%22%2F%3E%3Cpath%20transform%3D%22translate(48%2C94.5)%20scale(0.22)%20matrix(-1%200%200%20-1%20104%20149)%22%20d%3D%22M0.15161%2015.8471%2058.444%2074.4788%200%20133.353%2012.6695%20145.657C15.1397%20147.843%2019.8822%20149%2023.3646%20148.887%2026.8471%20148.775%2029.7882%20148.124%2033.5643%20144.981L104%2074.3521%2034.4195%204.81387C31.706%202.66669%2028.7301%200.152799%2023.6415%200.0763993%2018.553%200%2014.1163%202.03967%2011.6779%204.35553L0.15161%2015.8471Z%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #2b2d33;
+  --surface: #3b3d42;
+  --fg: #f8f6f2;
+  --muted: #b6b6b5;
+  --faint: #8d8e8f;
+  --line: #505155;
+  --hairline: #44454a;
+  --tile: rgba(254, 230, 0, 0.14);
+  --accent-strong: #fee600;
+  --focus: #9d88d9;
+  --ok: #67d0ab;
+  --ok-bg: #425553;
+  --warn: #fee600;
+  --warn-bg: #565539;
+  --bad: #ff8b6b;
+  --bad-bg: #5a4949;
+  --shadow: 0 8px 20px rgba(43, 45, 51, 0.55);
+  --topbar-bg: #2b2d33;
+  --topbar-fg: #f8f6f2;
+  --topbar-fg-muted: rgba(248, 246, 242, 0.72);
+  --topbar-line: #505155;
+  --topbar-ctl-hover: #8d8e8f;
+  --topbar-active-bg: #fee600;
+  --topbar-active-fg: #2b2d33;
+  --pattern: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2284%22%20height%3D%22118%22%20viewBox%3D%220%200%2084%20118%22%3E%3Cg%20fill%3D%22%23fee600%22%20fill-opacity%3D%220.05%22%3E%3Cpath%20transform%3D%22translate(6%2C6)%20scale(0.22)%20matrix(1%200%200%20-1%200%20149)%22%20d%3D%22M0.15161%2015.8471%2058.444%2074.4788%200%20133.353%2012.6695%20145.657C15.1397%20147.843%2019.8822%20149%2023.3646%20148.887%2026.8471%20148.775%2029.7882%20148.124%2033.5643%20144.981L104%2074.3521%2034.4195%204.81387C31.706%202.66669%2028.7301%200.152799%2023.6415%200.0763993%2018.553%200%2014.1163%202.03967%2011.6779%204.35553L0.15161%2015.8471Z%22%2F%3E%3Cpath%20transform%3D%22translate(6%2C65)%20scale(0.22)%20matrix(1%200%200%20-1%200%20149)%22%20d%3D%22M0.15161%2015.8471%2058.444%2074.4788%200%20133.353%2012.6695%20145.657C15.1397%20147.843%2019.8822%20149%2023.3646%20148.887%2026.8471%20148.775%2029.7882%20148.124%2033.5643%20144.981L104%2074.3521%2034.4195%204.81387C31.706%202.66669%2028.7301%200.152799%2023.6415%200.0763993%2018.553%200%2014.1163%202.03967%2011.6779%204.35553L0.15161%2015.8471Z%22%2F%3E%3Cpath%20transform%3D%22translate(48%2C-23.5)%20scale(0.22)%20matrix(-1%200%200%20-1%20104%20149)%22%20d%3D%22M0.15161%2015.8471%2058.444%2074.4788%200%20133.353%2012.6695%20145.657C15.1397%20147.843%2019.8822%20149%2023.3646%20148.887%2026.8471%20148.775%2029.7882%20148.124%2033.5643%20144.981L104%2074.3521%2034.4195%204.81387C31.706%202.66669%2028.7301%200.152799%2023.6415%200.0763993%2018.553%200%2014.1163%202.03967%2011.6779%204.35553L0.15161%2015.8471Z%22%2F%3E%3Cpath%20transform%3D%22translate(48%2C35.5)%20scale(0.22)%20matrix(-1%200%200%20-1%20104%20149)%22%20d%3D%22M0.15161%2015.8471%2058.444%2074.4788%200%20133.353%2012.6695%20145.657C15.1397%20147.843%2019.8822%20149%2023.3646%20148.887%2026.8471%20148.775%2029.7882%20148.124%2033.5643%20144.981L104%2074.3521%2034.4195%204.81387C31.706%202.66669%2028.7301%200.152799%2023.6415%200.0763993%2018.553%200%2014.1163%202.03967%2011.6779%204.35553L0.15161%2015.8471Z%22%2F%3E%3Cpath%20transform%3D%22translate(48%2C94.5)%20scale(0.22)%20matrix(-1%200%200%20-1%20104%20149)%22%20d%3D%22M0.15161%2015.8471%2058.444%2074.4788%200%20133.353%2012.6695%20145.657C15.1397%20147.843%2019.8822%20149%2023.3646%20148.887%2026.8471%20148.775%2029.7882%20148.124%2033.5643%20144.981L104%2074.3521%2034.4195%204.81387C31.706%202.66669%2028.7301%200.152799%2023.6415%200.0763993%2018.553%200%2014.1163%202.03967%2011.6779%204.35553L0.15161%2015.8471Z%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");
+}
+
+/* ---- Base ---------------------------------------------------------------- */
+
+* { box-sizing: border-box; }
 
 body {
-    margin: 0;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background-color: #f4f8fc;
-    color: #1e293b;
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg);
+  background-image: var(--pattern);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* ---- Header ---- */
-.site-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 2rem;
-    background-color: #1e293b;
-    color: #ffffff;
+a { color: var(--fg); }
+a:hover { color: var(--focus); }
+
+::selection { background: var(--accent); color: var(--accent-fg); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Language blocks: rich text that exists in both languages. The <html lang>
+   attribute (set before first paint, switched by the CZ/EN toggle) picks
+   the visible copy. */
+:root:lang(cs) .only-en { display: none; }
+:root:not(:lang(cs)) .only-cs { display: none; }
+
+/* ---- Top bar ------------------------------------------------------------- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 2rem;
+  background: var(--topbar-bg);
+  color: var(--topbar-fg);
+  border-bottom: 1px solid var(--topbar-line);
 }
 
-.brand {
-    display: flex;
-    flex-direction: column;
+.brand { display: flex; align-items: center; gap: 0.85rem; min-width: 0; }
+
+.brand-logo { display: block; width: 127px; height: auto; flex: none; }
+.brand-logo-dark { display: none; }
+:root[data-theme="dark"] .brand-logo-light { display: none; }
+:root[data-theme="dark"] .brand-logo-dark { display: block; }
+
+.brand-divider {
+  width: 1px;
+  height: 2rem;
+  flex: none;
+  background: var(--topbar-line);
 }
 
-.brand-name {
-    font-size: 1.4rem;
-    font-weight: 700;
+.brand-text { color: inherit; text-decoration: none; min-width: 0; }
+.brand-text:hover { color: inherit; }
+
+.brand-text strong {
+  display: block;
+  font-size: 0.94rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
 }
 
-.brand-tagline {
-    font-size: 0.85rem;
-    font-weight: 400;
-    color: #94a3b8;
+.brand-text small {
+  display: block;
+  color: var(--topbar-fg-muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.header-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
+.topbar-tools { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; justify-content: flex-end; }
+
+/* Small square/pill controls on the bar: Help, Report bugs, theme, language. */
+.topbar-ctl,
+.theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--topbar-line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--topbar-fg);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
 }
 
-/* ---- Buttons ---- */
-.btn {
-    border: none;
-    border-radius: 8px;
-    padding: 0.55rem 1rem;
-    font-size: 0.95rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background-color 0.15s ease;
+.topbar-ctl:hover,
+.theme-btn:hover { border-color: var(--topbar-ctl-hover); }
+
+.topbar-ctl-help {
+  width: 2rem;
+  padding: 0;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
-/* Neutral "?" button */
-.btn-help {
-    width: 2.6rem;
-    padding: 0.55rem 0;
-    background-color: #e2e8f0;
-    color: #1e293b;
+.theme-btn { width: 2rem; padding: 0; }
+
+.theme-icon { display: none; width: 18px; height: 18px; }
+.theme-icon-to-dark { display: block; }
+:root[data-theme="dark"] .theme-icon-to-dark { display: none; }
+:root[data-theme="dark"] .theme-icon-to-light { display: block; }
+:root[data-theme="dark"] .theme-icon { filter: invert(1); }
+
+.lang-switch {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--topbar-line);
+  border-radius: 7px;
+  background: transparent;
 }
 
-.btn-help:hover {
-    background-color: #cbd5e1;
+.lang-btn {
+  border: 0;
+  background: transparent;
+  color: var(--topbar-fg-muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 0.3rem 0.62rem;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-/* Red "Report bugs" button */
-.btn-report {
-    background-color: #dc2626;
-    color: #ffffff;
+.lang-btn:hover { color: var(--topbar-fg); }
+.lang-btn.is-active { background: var(--topbar-active-bg); color: var(--topbar-active-fg); }
+
+/* ---- Page shell ---------------------------------------------------------- */
+
+main.page-content {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: 0 2rem 3.5rem;
 }
 
-.btn-report:hover {
-    background-color: #b91c1c;
+footer {
+  width: 100%;
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: 1.2rem 2rem 2rem;
+  display: flex;
+  justify-content: center;
 }
 
-/* ---- Page content ---- */
-.page-content {
-    padding: 2rem;
-}
+.copyright { color: var(--muted); font-size: 0.94rem; letter-spacing: 0.01em; }
 
-/* Shown only when JavaScript is disabled (the app needs JS to run) */
+/* Shown only when JavaScript is disabled (the app needs JS to run). */
 .noscript-banner {
-    max-width: 1100px;
-    margin: 0 auto 1.5rem;
-    padding: 0.85rem 1.25rem;
-    border: 1px solid #fcd34d;
-    border-radius: 10px;
-    background-color: #fffbeb;
-    color: #92400e;
-    font-weight: 600;
+  max-width: 1100px;
+  margin: 1.5rem auto 0;
+  padding: 0.85rem 1.25rem;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background-color: var(--tile);
+  font-weight: 600;
 }
 
-/* ---- Lookup layout: two cards side by side, centered with whitespace on the sides ---- */
+/* ---- Masthead (search page) --------------------------------------------- */
+
+.masthead { max-width: 1100px; margin: 0 auto; padding: 3rem 0 1.9rem; }
+
+.kicker {
+  display: block;
+  margin-bottom: 1rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.masthead h1 {
+  margin: 0;
+  max-width: 26ch;
+  font-size: clamp(2.1rem, 1.4rem + 3vw, 3.2rem);
+  font-weight: 400;
+  letter-spacing: -0.035em;
+  line-height: 1.04;
+  text-wrap: balance;
+}
+
+.masthead h1 strong { font-weight: 800; }
+
+.marker {
+  background-image: linear-gradient(var(--accent), var(--accent));
+  background-repeat: no-repeat;
+  background-size: 100% 0.26em;
+  background-position: 0 88%;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.hero-sub {
+  margin: 1rem 0 0;
+  max-width: 48ch;
+  color: var(--muted);
+  font-size: 1rem;
+  text-wrap: pretty;
+}
+
+/* ---- Buttons ------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.6rem 1rem;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.94rem;
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btn:hover { border-color: var(--faint); color: var(--fg); box-shadow: var(--shadow); }
+
+/* The one yellow action per card. */
+.btn-primary {
+  align-self: flex-start;
+  width: 220px;
+  max-width: 100%;
+  /* Fixed width so a long error message next to it wraps instead of
+     squeezing the button. */
+  flex-shrink: 0;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.7rem 1.4rem;
+  font-size: 1rem;
+}
+
+.btn-primary:hover { border-color: var(--fg); color: var(--accent-fg); }
+.btn-primary:disabled { opacity: 0.6; cursor: progress; box-shadow: none; }
+
+/* Disabled state for both <button> and the anchor "button". */
+.btn-result:disabled,
+.btn-result.is-disabled {
+  background: transparent;
+  border-color: var(--hairline);
+  color: var(--faint);
+  cursor: not-allowed;
+  pointer-events: none;
+  box-shadow: none;
+}
+
+/* ---- Lookup layout: two cards side by side --------------------------------- */
+
 .lookup-container {
-    max-width: 1100px;
-    margin: 0 auto;
-    display: flex;
-    flex-direction: row;
-    align-items: stretch;
-    gap: 1.5rem;
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 1.25rem;
 }
 
-/* ---- Card ---- */
-.card {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    background-color: #ffffff;
-    border-radius: 12px;
-    padding: 2rem;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
-/* Stack the cards before they get squeezed too narrow */
 @media (max-width: 900px) {
-    .lookup-container {
-        flex-direction: column;
-    }
+  .lookup-container { flex-direction: column; }
+}
+
+.card {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.75rem 1.9rem;
 }
 
 .card-title {
-    margin: 0 0 1.25rem;
-    font-size: 1.4rem;
-    color: #1e293b;
+  margin: 0 0 1rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.012em;
 }
 
-.card-subtitle {
-    margin: 0 0 1.25rem;
-    color: #64748b;
-}
+.card-subtitle { margin: 0 0 1.25rem; color: var(--muted); font-size: 0.94rem; }
+ul.card-subtitle { padding-left: 1.25rem; }
+ul.card-subtitle li { margin-bottom: 0.4rem; }
+.card-subtitle strong { color: var(--fg); }
 
-ul.card-subtitle {
-    padding-left: 1.25rem;
-}
+/* ---- Form fields --------------------------------------------------------- */
 
-ul.card-subtitle li {
-    margin-bottom: 0.4rem;
-}
-
-/* ---- Form fields ---- */
-.field {
-    margin-bottom: 1rem;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-}
+.field { margin-bottom: 1rem; display: flex; flex-direction: column; min-width: 0; }
 
 .field label {
-    margin-bottom: 0.4rem;
-    font-weight: 600;
-    font-size: 0.9rem;
-}
-
-.required {
-    color: #dc2626;
-}
-
-/* Make the form fill the card so the button can sit at the bottom */
-.lookup-form {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-}
-
-/* Push the footer (button + error message) to the bottom of its card */
-.form-footer {
-    margin-top: auto;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-}
-
-/* Validation message shown next to the Search button */
-.form-error {
-    color: #dc2626;
-    font-size: 0.9rem;
+  margin-bottom: 0.4rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .field input {
-    width: 100%;
-    padding: 0.7rem 0.85rem;
-    border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    font-size: 0.95rem;
+  width: 100%;
+  padding: 0.68rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.94rem;
+  transition: border-color 0.15s ease;
 }
 
-.field input:focus {
-    outline: none;
-    border-color: #2563eb;
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
-}
+:root[data-theme="dark"] .field input { background: var(--bg); }
+.field input::placeholder { color: var(--faint); }
+.field input:hover { border-color: var(--faint); }
+.field input:focus { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--line); }
 
-/* Two fields side by side */
-.field-row {
-    display: flex;
-    gap: 1rem;
-}
+.field-row { display: flex; gap: 1rem; }
+.field-row .field { flex: 1; }
 
-.field-row .field {
-    flex: 1;
-}
+.lookup-form { display: flex; flex-direction: column; flex: 1; }
 
-/* ---- Primary action button ---- */
-.btn-primary {
-    align-self: flex-start;
-    width: 220px;
-    max-width: 100%;
-    /* Keep a fixed width: without this the flex row shrinks the button to
-       make room for a long error message next to it. Let the message wrap
-       instead. */
-    flex-shrink: 0;
-    background-color: #2563eb;
-    color: #ffffff;
-    padding: 0.7rem 1.4rem;
-    font-size: 1rem;
-}
+/* Footer of each card: the button plus its validation message. */
+.form-footer { margin-top: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem; }
+.form-error { color: var(--bad); font-size: 0.9rem; flex: 1 1 12rem; overflow-wrap: anywhere; }
 
-.btn-primary:hover {
-    background-color: #1d4ed8;
-}
+/* ---- Bulk upload --------------------------------------------------------- */
 
-/* ---- Selected files list ---- */
-.file-list {
-    height: 2.75rem;
-    padding: 0.75rem 1rem;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    background-color: #f8fafc;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-/* "n/1" counter on the left */
-.file-count {
-    flex-shrink: 0;
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: #64748b;
-}
-
-/* Holds the selected file (or the empty hint), filling the rest of the box */
-.file-list-items {
-    flex: 1;
-    min-width: 0;
-}
-
-.file-list-empty {
-    color: #94a3b8;
-    font-size: 0.9rem;
-}
-
-/* Selected file: name on the left, remove (x) button on the right */
-.file-list-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    color: #1e293b;
-    font-size: 0.9rem;
-    font-weight: 600;
-}
-
-.file-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.file-remove {
-    flex-shrink: 0;
-    border: none;
-    background: none;
-    font-size: 1.1rem;
-    line-height: 1;
-    color: #94a3b8;
-    cursor: pointer;
-    padding: 0 0.25rem;
-}
-
-.file-remove:hover {
-    color: #dc2626;
-}
-
-/* ---- File upload dropzone ---- */
-.upload-form {
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-    flex: 1;
-}
+.upload-form { display: flex; flex-direction: column; gap: 1.25rem; flex: 1; }
 
 .dropzone {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.35rem;
-    padding: 1.25rem 1rem;
-    border: 2px dashed #cbd5e1;
-    border-radius: 10px;
-    text-align: center;
-    cursor: pointer;
-    transition: border-color 0.15s ease, background-color 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 1.35rem 1rem;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
-.dropzone:hover {
-    border-color: #2563eb;
-    background-color: #f8fafc;
-}
-
-/* While a file is being dragged over the zone */
-.dropzone.is-dragover {
-    border-color: #2563eb;
-    background-color: #eff6ff;
-}
+.dropzone:hover { border-color: var(--accent-strong); }
+.dropzone.is-dragover { border-color: var(--accent-strong); background-color: var(--tile); }
 
 .dropzone-icon {
-    font-size: 1.5rem;
-    color: #64748b;
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 12px;
+  background: var(--tile);
+  font-size: 1.2rem;
+  color: var(--fg);
 }
 
-.dropzone-text {
-    color: #475569;
+.dropzone-text { color: var(--fg); }
+.dropzone-hint { font-size: 0.85rem; color: var(--muted); }
+
+.file-list {
+  min-height: 2.75rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 
-.dropzone-hint {
-    font-size: 0.85rem;
-    color: #94a3b8;
+.file-count {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
 }
 
-/* ---- Results / status card ---- */
-/* Spans the full width under the two lookup cards, same centered column. */
+.file-list-items { flex: 1; min-width: 0; }
+.file-list-empty { color: var(--faint); font-size: 0.9rem; }
+
+.file-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.file-remove {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--faint);
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+
+.file-remove:hover { color: var(--bad); }
+
+/* ---- Results summary card ------------------------------------------------ */
+
 .results-card {
-    max-width: 1100px;
-    margin: 1.5rem auto 0;
-    background-color: #ffffff;
-    border-radius: 12px;
-    padding: 1.75rem 2rem;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
+  max-width: 1100px;
+  margin: 1.5rem auto 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.6rem 1.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.4rem;
 }
 
-/* Idle: nothing is being searched, so everything reads as muted gray. */
-.results-card.is-idle {
-    background-color: #f8fafc;
-    color: #94a3b8;
-}
+.results-status { display: flex; align-items: center; gap: 0.75rem; font-weight: 650; }
 
-.results-status {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    font-weight: 600;
-    color: #1e293b;
-}
-
-.results-card.is-idle .results-status {
-    color: #94a3b8;
-}
-
-/* CSS-only spinner. Static and gray by default, animates only while running. */
+/* CSS-only spinner: static by default, animates only while running. */
 .spinner {
-    width: 1.4rem;
-    height: 1.4rem;
-    border: 3px solid #e2e8f0;
-    border-top-color: #cbd5e1;
-    border-radius: 50%;
-    flex-shrink: 0;
+  width: 1.3rem;
+  height: 1.3rem;
+  border: 3px solid var(--line);
+  border-top-color: var(--line);
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .results-card.is-running .spinner {
-    border-color: #cbd5e1;
-    border-top-color: #2563eb;
-    animation: spinner-rotate 0.8s linear infinite;
+  border-top-color: var(--fg);
+  animation: spinner-rotate 0.8s linear infinite;
 }
 
-@keyframes spinner-rotate {
-    to {
-        transform: rotate(360deg);
-    }
-}
+@keyframes spinner-rotate { to { transform: rotate(360deg); } }
 
-/* Error state: the status line turns red and carries the message. */
-.results-card.has-error .results-state-text {
-    color: #dc2626;
-}
+.results-card.has-error .spinner { border-color: var(--bad-bg); border-top-color: var(--bad); }
+.results-card.has-error .results-state-text { color: var(--bad); }
 
-/* Completed but nothing matched: a distinct amber "No matches" state. */
-.results-card.no-matches .results-state-text {
-    color: #b45309;
-}
-
-/* Metrics: searched / found / confidence */
-.results-metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-}
+.results-metrics { display: flex; flex-wrap: wrap; gap: 0.9rem; }
 
 .metric {
-    flex: 1;
-    min-width: 140px;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    padding: 1rem 1.25rem;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    background-color: #ffffff;
-}
-
-.results-card.is-idle .metric {
-    background-color: #f1f5f9;
-    border-color: #e2e8f0;
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
 }
 
 .metric-label {
-    font-size: 0.8rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: #64748b;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.results-card.is-idle .metric-label {
-    color: #94a3b8;
-}
+.metric-value { font-size: 1.5rem; font-weight: 750; letter-spacing: -0.02em; }
 
-.metric-value {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: #1e293b;
-}
+/* Outcome tiles: a 2px border in the outcome colour, the number in the
+   same colour (yellow stays on the border only - it is unreadable as text). */
+.metric-matched { border: 2px solid var(--ok); }
+.metric-matched .metric-value { color: var(--ok); }
+.metric-validate { border: 2px solid var(--warn); }
+.metric-unmatched { border: 2px solid var(--bad); }
+.metric-unmatched .metric-value { color: var(--bad); }
 
-.results-card.is-idle .metric-value {
-    color: #cbd5e1;
-}
+.results-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.results-actions-split { justify-content: space-between; align-items: center; }
+.download-group { display: flex; flex-wrap: wrap; gap: 0.75rem; }
 
-/* Summary breakdown: the "Searched" total stays a plain white tile,
-   while each outcome tile gets a thick border and its number in its own
-   color (green matched, orange to validate, red unmatched). */
-.metric-matched {
-    border: 2px solid #16a34a;
-}
+/* ---- Dialogs (Help, Report bugs) ----------------------------------------- */
 
-.metric-matched .metric-value {
-    color: #16a34a;
-}
-
-.metric-validate {
-    border: 2px solid #d97706;
-}
-
-.metric-validate .metric-value {
-    color: #d97706;
-}
-
-.metric-unmatched {
-    border: 2px solid #dc2626;
-}
-
-.metric-unmatched .metric-value {
-    color: #dc2626;
-}
-
-/* Action buttons: downloads + detailed view */
-.results-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-}
-
-.btn-result {
-    background-color: #2563eb;
-    color: #ffffff;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-}
-
-.btn-result:hover {
-    background-color: #1d4ed8;
-}
-
-.btn-detailed {
-    background-color: #475569;
-}
-
-.btn-detailed:hover {
-    background-color: #334155;
-}
-
-/* Disabled state for both <button> and the anchor "button" */
-.btn-result:disabled,
-.btn-result.is-disabled {
-    background-color: #e2e8f0;
-    color: #94a3b8;
-    cursor: not-allowed;
-    pointer-events: none;
-}
-
-/* On the detail page the card's actions split: "Back to search" on the
-   left, the download buttons grouped on the right. */
-.results-actions-split {
-    justify-content: space-between;
-    align-items: center;
-}
-
-.download-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-}
-
-/* ---- Dialogs (Help, Report bugs) ---- */
 .dialog {
-    width: min(90vw, 540px);
-    border: none;
-    border-radius: 12px;
-    padding: 0;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
-    color: #1e293b;
+  width: min(90vw, 560px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0;
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow);
 }
 
-.dialog::backdrop {
-    background-color: rgba(15, 23, 42, 0.45);
-}
+.dialog::backdrop { background-color: rgba(43, 45, 51, 0.55); }
 
 .dialog-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 1.25rem 1.5rem;
-    border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.15rem 1.5rem;
+  border-bottom: 1px solid var(--line);
 }
 
-.dialog-title {
-    margin: 0;
-    font-size: 1.25rem;
-}
+.dialog-title { margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.012em; }
 
 .dialog-close {
-    border: none;
-    background: none;
-    font-size: 1.6rem;
-    line-height: 1;
-    color: #64748b;
-    cursor: pointer;
-    padding: 0 0.25rem;
+  border: none;
+  background: none;
+  font-size: 1.6rem;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.25rem;
 }
 
-.dialog-close:hover {
-    color: #1e293b;
-}
+.dialog-close:hover { color: var(--fg); }
 
-.dialog-body {
-    padding: 1.25rem 1.5rem 1.5rem;
-}
-
-.dialog-body p {
-    margin-top: 0;
-}
+.dialog-body { padding: 1.25rem 1.5rem 1.5rem; font-size: 0.94rem; }
+.dialog-body p { margin-top: 0; }
+.dialog-body a { color: var(--focus); }
 
 .dialog-subtitle {
-    margin: 1.25rem 0 0.5rem;
-    font-size: 1rem;
+  margin: 1.25rem 0 0.5rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.dialog-steps {
-    margin: 0;
-    padding-left: 1.25rem;
-}
+.dialog-steps, .dialog-contacts { margin: 0; padding-left: 1.25rem; }
+.dialog-steps li, .dialog-contacts li { margin-bottom: 0.4rem; }
 
-.dialog-steps li {
-    margin-bottom: 0.4rem;
-}
+/* ---- Results page -------------------------------------------------------- */
 
-.dialog-contacts {
-    margin: 0;
-    padding-left: 1.25rem;
-}
+.results-page { max-width: 1100px; margin: 0 auto; padding-top: 1.5rem; }
 
-.dialog-contacts li {
-    margin-bottom: 0.4rem;
-}
+.results-page > .results-card { margin-top: 0; margin-bottom: 1.5rem; }
 
-/* ---- Detailed results page ---- */
-.results-page {
-    max-width: 1100px;
-    margin: 0 auto;
-}
+.results-page-title { margin: 0 0 0.25rem; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; }
 
-/* The summary card leads the detail page, so it sits flush at the top. */
-.results-page > .results-card {
-    margin-top: 0;
-    margin-bottom: 1.5rem;
-}
+.results-page-note { margin: 0 0 1.5rem; color: var(--muted); }
 
-.results-page-title {
-    margin: 0 0 0.25rem;
-    color: #1e293b;
-}
-
-.results-page-note {
-    margin: 0 0 1.5rem;
-    color: #64748b;
-}
-
-/* Let wide tables scroll inside their own container on small screens */
 .results-table-wrap {
-    overflow-x: auto;
-    background-color: #ffffff;
-    border-radius: 12px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
 }
 
-.results-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.95rem;
-}
+.results-table { width: 100%; border-collapse: collapse; font-size: 0.94rem; }
 
 .results-table th,
 .results-table td {
-    padding: 0.85rem 1rem;
-    text-align: left;
-    border-bottom: 1px solid #e2e8f0;
-    white-space: nowrap;
+  padding: 0.8rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
 }
 
 .results-table th {
-    background-color: #f1f5f9;
-    color: #475569;
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
+  background: var(--bg);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.results-table tbody tr:last-child td {
-    border-bottom: none;
+.results-table tbody tr:last-child td { border-bottom: none; }
+
+.cell-lei { font-family: var(--mono); }
+
+/* Zone titles for the stepper and the two tables. */
+.zone-title {
+  margin: 1.5rem 0 0.75rem;
+  padding-left: 0.6rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  border-left: 4px solid var(--line);
 }
 
-.cell-lei {
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-}
+.zone-validate { border-left-color: var(--warn); }
+.zone-matched { border-left-color: var(--ok); }
+.zone-nomatch { border-left-color: var(--bad); }
 
-/* ---- Detailed results: validation workflow ---- */
-.detail-searched {
-    margin: 0 0 1rem;
-    color: #64748b;
-}
+.table-matched th { background: var(--ok-bg); color: var(--ok); }
+.table-nomatch th { background: var(--bad-bg); color: var(--bad); }
 
-/* The one-at-a-time review stepper. */
+/* Let the no-match notes wrap instead of forcing the table wide. */
+.table-nomatch td:last-child { white-space: normal; min-width: 18rem; }
+
+.gleif-link { color: var(--focus); font-weight: 600; text-decoration: none; white-space: nowrap; }
+.gleif-link:hover { text-decoration: underline; }
+
+/* ---- Validation stepper -------------------------------------------------- */
+
+.detail-searched { margin: 0 0 1rem; color: var(--muted); }
+.detail-searched strong { color: var(--fg); }
+
 .validation {
-    background-color: #ffffff;
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin-bottom: 2rem;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
 }
 
 .validation-nav {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 1rem;
-    margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
 }
 
 .validation-prev,
 .validation-next {
-    border: 1px solid #cbd5e1;
-    background-color: #ffffff;
-    border-radius: 8px;
-    width: 2.4rem;
-    height: 2.4rem;
-    font-size: 1.1rem;
-    color: #1e293b;
-    cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+  width: 2.4rem;
+  height: 2.4rem;
+  font-size: 1.1rem;
+  color: var(--fg);
+  cursor: pointer;
+  transition: border-color 0.15s ease;
 }
 
 .validation-prev:hover,
-.validation-next:hover {
-    background-color: #f1f5f9;
-}
+.validation-next:hover { border-color: var(--faint); }
 
 .validation-prev:disabled,
-.validation-next:disabled {
-    color: #cbd5e1;
-    cursor: not-allowed;
-}
+.validation-next:disabled { color: var(--faint); border-color: var(--hairline); cursor: not-allowed; }
 
 .validation-position {
-    min-width: 7rem;
-    text-align: center;
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: #64748b;
+  min-width: 8rem;
+  text-align: center;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-/* One record visible at a time; the stepper JS toggles .is-active. */
-.validate-record {
-    display: none;
-}
-
-.validate-record.is-active {
-    display: block;
-}
+.validate-record { display: none; }
+.validate-record.is-active { display: block; }
 
 @keyframes record-slide-right {
-    from { opacity: 0; transform: translateX(40px); }
-    to   { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translateX(40px); }
+  to { opacity: 1; transform: none; }
 }
 
 @keyframes record-slide-left {
-    from { opacity: 0; transform: translateX(-40px); }
-    to   { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translateX(-40px); }
+  to { opacity: 1; transform: none; }
 }
 
-.validate-record.slide-right {
-    animation: record-slide-right 0.2s ease;
-}
+.validate-record.slide-right { animation: record-slide-right 0.2s ease; }
+.validate-record.slide-left { animation: record-slide-left 0.2s ease; }
 
-.validate-record.slide-left {
-    animation: record-slide-left 0.2s ease;
-}
-
-/* Candidate table: the closest-candidate look plus expand + confirm.
-   --confirm-col-width fixes the button column's width so the Overall
-   match column (pinned just left of it) can offset itself by exactly
+/* Candidate table: the Overall match column and the confirm button stay
+   pinned to the right edge while a long row scrolls. --confirm-col-width
+   fixes the button column so the percent column can offset by exactly
    that amount. */
-.candidates-table {
-    --confirm-col-width: 170px;
-}
+.candidates-table { --confirm-col-width: 170px; }
 
-.candidates-table .col-expand {
-    width: 1%;
-    white-space: nowrap;
-    text-align: center;
-}
+.candidates-table .col-expand { width: 1%; white-space: nowrap; text-align: center; }
 
 .candidates-table .col-confirm {
-    width: var(--confirm-col-width);
-    white-space: nowrap;
-    text-align: center;
+  width: var(--confirm-col-width);
+  white-space: nowrap;
+  text-align: center;
+  position: sticky;
+  right: 0;
+  background: var(--surface);
 }
 
-/* Pin the Overall match percent and the confirm button to the right edge
-   so both stay visible when a long row scrolls horizontally inside its
-   wrapper (Overall match sits just left of the button). The box-shadow
-   marks the left edge of this pinned pair (a plain border would not paint
-   with border-collapse), so it lives on the leftmost pinned column. Each
-   state repeats its row's background so scrolled content does not show
-   through the pinned cells. */
-.candidates-table .col-confirm {
-    position: sticky;
-    right: 0;
-    background-color: #ffffff;
-}
-
-/* Fix the button to the column's inner width so the cell can never be
-   narrower than --confirm-col-width (auto table layout otherwise shrink-
-   wraps it to the button). If it were narrower, the Overall match
-   column's offset would overshoot and scrolled content would show through
-   the seam. 2rem = the cell's left + right padding (1rem each). */
 .candidates-table .candidate-confirm {
-    box-sizing: border-box;
-    width: calc(var(--confirm-col-width) - 2rem);
+  box-sizing: border-box;
+  width: calc(var(--confirm-col-width) - 2rem);
 }
 
 .candidates-table .col-overall {
-    position: sticky;
-    right: var(--confirm-col-width);
-    /* Right-align so the short percent hugs the pinned button rather
-       than stranding white space across this header-width column. */
-    text-align: right;
-    background-color: #ffffff;
-    box-shadow: -6px 0 6px -6px rgba(15, 23, 42, 0.15);
+  position: sticky;
+  right: var(--confirm-col-width);
+  text-align: right;
+  font-weight: 700;
+  background: var(--surface);
+  box-shadow: -6px 0 6px -6px rgba(43, 45, 51, 0.25);
 }
 
 .candidates-table thead .col-confirm,
-.candidates-table thead .col-overall {
-    background-color: #f1f5f9;
-}
+.candidates-table thead .col-overall { background: var(--bg); }
 
+.candidate-row.is-chosen,
 .candidate-row.is-chosen .col-confirm,
-.candidate-row.is-chosen .col-overall {
-    background-color: #dcfce7;
-}
+.candidate-row.is-chosen .col-overall { background: var(--ok-bg); }
 
 .candidate-expand {
-    border: none;
-    background: none;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0.35rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+  border: none;
+  background: none;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-/* A down-pointing triangle that flips to point up when the row is open. */
 .candidate-expand .chevron {
-    display: inline-block;
-    width: 0;
-    height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid #64748b;
-    transition: transform 0.15s ease;
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--muted);
+  transition: transform 0.15s ease;
 }
 
-.candidate-expand:hover .chevron {
-    border-top-color: #1e293b;
-}
-
-.candidate-expand[aria-expanded="true"] .chevron {
-    transform: rotate(180deg);
-}
+.candidate-expand:hover .chevron { border-top-color: var(--fg); }
+.candidate-expand[aria-expanded="true"] .chevron { transform: rotate(180deg); }
 
 .candidate-confirm {
-    background-color: #16a34a;
-    color: #ffffff;
-    padding: 0.4rem 0.8rem;
-    font-size: 0.85rem;
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--surface);
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
 }
 
-.candidate-confirm:hover {
-    background-color: #15803d;
-}
+.candidate-confirm:hover { color: var(--surface); border-color: var(--fg); }
 
-/* "None of these" chosen: de-emphasise the match buttons to grey. They
-   stay clickable, so picking one still overrides the "none" choice. */
-.candidate-confirm.is-muted {
-    background-color: #e2e8f0;
-    color: #64748b;
-}
+/* "None of these" chosen: de-emphasise the match buttons. They stay
+   clickable, so picking one still overrides the "none" choice. */
+.candidate-confirm.is-muted { background: var(--hairline); border-color: var(--hairline); color: var(--muted); }
+.candidate-confirm.is-muted:hover { color: var(--fg); }
 
-.candidate-confirm.is-muted:hover {
-    background-color: #cbd5e1;
-}
-
-/* A candidate the user has confirmed as the match for this record. */
-.candidate-row.is-chosen {
-    background-color: #dcfce7;
-}
-
-.candidate-detail td {
-    background-color: #f8fafc;
-}
+.candidate-detail td { background: var(--bg); white-space: normal; }
 
 .candidate-detail-fields {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.35rem 1rem;
-    margin: 0 0 0.5rem;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0 0 0.5rem;
 }
 
 .candidate-detail-fields dt {
-    font-weight: 600;
-    color: #64748b;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding-top: 0.15rem;
 }
 
-.candidate-detail-fields dd {
-    margin: 0;
+.candidate-detail-fields dd { margin: 0; }
+
+.validate-actions { margin-top: 1rem; text-align: right; }
+
+.validate-none.is-chosen { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
+
+/* ---- Preferences / small screens ----------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
 }
 
-.gleif-link {
-    color: #2563eb;
-    font-weight: 600;
-    text-decoration: none;
-    white-space: nowrap;
+@media (max-width: 700px) {
+  .brand-divider, .brand-text { display: none; }
+  .field-row { flex-direction: column; gap: 0; }
+  .results-actions-split { flex-direction: column; align-items: stretch; }
 }
 
-.gleif-link:hover {
-    text-decoration: underline;
+@media (max-width: 560px) {
+  .topbar { padding: 0.7rem 1.1rem; }
+  main.page-content { padding: 0 1.1rem 2.5rem; }
+  footer { padding: 1.5rem 1.1rem 2.2rem; }
+  .masthead { padding: 2rem 0 1.3rem; }
+  .card, .results-card { padding: 1.25rem; }
 }
 
-.validate-actions {
-    margin-top: 1rem;
-    text-align: right;
+/* Keep the native picker in the tab order without exposing its chrome. */
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.dropzone:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+.upload-limits { margin: 0; font-size: 0.8rem; color: var(--muted); }
+.metric-value { font-variant-numeric: tabular-nums; }
+
+@media (max-width: 560px) {
+  .topbar { flex-wrap: wrap; }
+  .topbar-tools { gap: 0.45rem; }
+  .topbar-ctl, .theme-btn, .lang-btn { min-height: 40px; }
+  .form-footer .btn-primary { width: 100%; }
+  .form-error { flex-basis: 100%; }
+  .validation { padding: 1.25rem; }
+  .download-group { display: flex; flex-wrap: wrap; }
+  .download-group .btn { flex: 1; justify-content: center; }
 }
 
-.validate-none {
-    background-color: #e2e8f0;
-    color: #1e293b;
+/* Lookup cards follow the Finance RB CZ gateway's icon tiles and tags. */
+.lookup-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
 }
-
-.validate-none:hover {
-    background-color: #cbd5e1;
+.lookup-icon {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: none;
+  background: var(--tile);
+  border-radius: 12px;
+  color: var(--fg);
 }
-
-/* The record was marked "none of these". */
-.validate-none.is-chosen {
-    background-color: #fee2e2;
-    color: #991b1b;
+.lookup-icon svg { width: 24px; height: 24px; }
+.lookup-tag {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font: 0.7rem var(--mono);
+  letter-spacing: 0.025em;
 }
-
-/* Zone titles for the matched / no-match tables. */
-.zone-title {
-    margin: 1.5rem 0 0.75rem;
-    padding-left: 0.6rem;
-    font-size: 1.1rem;
-    border-left: 4px solid #cbd5e1;
+.lookup-container .card { min-width: 0; }
+.lookup-container .card-title { margin-bottom: 0.6rem; }
+.column-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0 0 1.25rem;
+  padding: 0.8rem 1rem;
+  border-left: 2px solid var(--accent);
+  background: var(--bg);
+  border-radius: 0 8px 8px 0;
+  font-size: 0.82rem;
+  color: var(--muted);
 }
-
-.zone-validate {
-    border-left-color: #d97706;
+.column-guide strong {
+  color: var(--fg);
+  font: 0.7rem var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
-
-.zone-matched {
-    border-left-color: #16a34a;
-}
-
-.zone-nomatch {
-    border-left-color: #dc2626;
-}
-
-/* Tint the matched / no-match table headers to match their zone. */
-.table-matched th {
-    background-color: #dcfce7;
-    color: #166534;
-}
-
-.table-nomatch th {
-    background-color: #fee2e2;
-    color: #991b1b;
-}
-
-/* Let the no-match notes wrap instead of forcing the table wide. */
-.table-nomatch td:last-child {
-    white-space: normal;
-    min-width: 18rem;
-}
+.lookup-form .form-footer { padding-top: 0.5rem; }
+.lookup-container .card:focus-within { border-color: var(--focus); }

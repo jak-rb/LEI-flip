@@ -149,7 +149,7 @@ def test_bulk_flow_runs_in_chunks_and_records_decisions(
     assert _run(client, job_id).get_json()["searched"] == 3
 
     page = client.get(f"/results?job={job_id}").get_data(as_text=True)
-    assert "To validate (<span class=\"validate-remaining\">1</span>)" in page
+    assert 'class="validate-remaining">1</span>' in page
     assert "Review Ltd" in page and "Nobody s.r.o." in page
 
     bad = client.post(
@@ -168,7 +168,7 @@ def test_bulk_flow_runs_in_chunks_and_records_decisions(
     }
 
     decided = client.get(f"/results?job={job_id}").get_data(as_text=True)
-    assert "To validate (<span class=\"validate-remaining\">0</span>)" in decided
+    assert 'class="validate-remaining">0</span>' in decided
     csv_out = client.get(f"/download/csv?job={job_id}").get_data(as_text=True)
     assert "MANUAL_MATCH" in csv_out and REVIEW_LEI in csv_out
 
