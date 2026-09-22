@@ -45,10 +45,12 @@
                     <small data-cs="Vyhledávání v GLEIF" data-en="GLEIF lookup">GLEIF lookup</small>
                 </a>
             </div>
-            <nav class="topbar-tools" aria-label="Tools">
+            <nav class="topbar-tools" aria-label="Tools"
+                 data-cs-aria-label="Nástroje" data-en-aria-label="Tools">
                 <button type="button" id="help-btn" class="topbar-ctl topbar-ctl-help"
                         title="Help" aria-label="Help"
-                        data-cs-title="Nápověda" data-en-title="Help">?</button>
+                        data-cs-title="Nápověda" data-en-title="Help"
+                        data-cs-aria-label="Nápověda" data-en-aria-label="Help">?</button>
                 <button type="button" id="report-btn" class="topbar-ctl"
                         data-cs="Nahlásit chybu" data-en="Report bugs">Report bugs</button>
                 <button type="button" class="theme-btn" id="theme-toggle">
@@ -57,7 +59,8 @@
                     <img class="theme-icon theme-icon-to-light"
                          src="{{ url_for('static', filename='img/icons/sun.png') }}" alt="">
                 </button>
-                <div class="lang-switch" role="group" aria-label="Language">
+                <div class="lang-switch" role="group" aria-label="Language"
+                     data-cs-aria-label="Jazyk" data-en-aria-label="Language">
                     <button type="button" class="lang-btn" data-setlang="cs" aria-pressed="false">CZ</button>
                     <button type="button" class="lang-btn is-active" data-setlang="en" aria-pressed="true">EN</button>
                 </div>
@@ -87,7 +90,8 @@
                     <h2 class="dialog-title"
                         data-cs="Jak používat LEI lookup"
                         data-en="How to use LEI lookup">How to use LEI lookup</h2>
-                    <button type="submit" class="dialog-close" aria-label="Close">&times;</button>
+                    <button type="submit" class="dialog-close" aria-label="Close"
+                            data-cs-aria-label="Zavřít" data-en-aria-label="Close">&times;</button>
                 </div>
                 <div class="dialog-body only-en">
                     <p>LEI lookup finds a company's Legal Entity Identifier (LEI)
@@ -182,7 +186,8 @@
                     <h2 class="dialog-title"
                         data-cs="Nahlásit chybu"
                         data-en="Report a bug">Report a bug</h2>
-                    <button type="submit" class="dialog-close" aria-label="Close">&times;</button>
+                    <button type="submit" class="dialog-close" aria-label="Close"
+                            data-cs-aria-label="Zavřít" data-en-aria-label="Close">&times;</button>
                 </div>
                 <div class="dialog-body">
                     <p data-cs="Narazili jste na problém? Ozvěte se:"

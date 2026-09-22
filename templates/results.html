@@ -181,10 +181,10 @@
                                     <dd>{{ c.hq_address or "-" }}</dd>
                                     <dt data-cs="Skóre polí" data-en="Field scores">Field scores</dt>
                                     <dd>
-                                        <span data-cs="Název" data-en="Name">Name</span> {{ c.name_score }} &middot;
-                                        <span data-cs="Město" data-en="City">City</span> {{ c.city_score }} &middot;
-                                        <span data-cs="Ulice" data-en="Street">Street</span> {{ c.street_score }} &middot;
-                                        <span data-cs="PSČ" data-en="ZIP">ZIP</span> {{ c.zip_score }}
+                                        <span data-cs="Název" data-en="Name">Name</span> {{ c.name_score|round|int }} &middot;
+                                        <span data-cs="Město" data-en="City">City</span> {{ c.city_score|round|int }} &middot;
+                                        <span data-cs="Ulice" data-en="Street">Street</span> {{ c.street_score|round|int }} &middot;
+                                        <span data-cs="PSČ" data-en="ZIP">ZIP</span> {{ c.zip_score|round|int }}
                                     </dd>
                                 </dl>
                             </td>

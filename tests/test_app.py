@@ -11,6 +11,7 @@ import io
 import pytest
 
 import app as app_module
+from core import storage
 from core.gleif import GleifApiError
 from core.models import CandidateSummary, LookupResult, MatchType
 
@@ -151,6 +152,7 @@ def test_bulk_flow_runs_in_chunks_and_records_decisions(
     page = client.get(f"/results?job={job_id}").get_data(as_text=True)
     assert 'class="validate-remaining">1</span>' in page
     assert "Review Ltd" in page and "Nobody s.r.o." in page
+    assert ">None<" not in page  # null fields render as empty cells
 
     bad = client.post(
         "/api/decision",
@@ -217,6 +219,27 @@ def test_gleif_outage_keeps_progress_and_resumes(client, monkeypatch):
     resumed = _run(client, job_id).get_json()
     assert resumed["done"] is True
     assert resumed["searched"] == 3 and resumed["matched"] == 3
+
+
+def test_racing_run_calls_do_not_duplicate_rows(client, monkeypatch):
+    # A refresh mid-search leaves the old /run call finishing on the
+    # server while the new page starts another one. Simulate the rival
+    # call storing the entity while ours is still looking it up.
+    job_id = _create_single(client, entity_name="Match AG").get_json()[
+        "job_id"
+    ]
+
+    def _raced(entity, client_):
+        result, closest = _fake_lookup(entity, client_)
+        storage.append_results(
+            job_id, [app_module._result_row(entity, result, closest)], 0,
+        )
+        return result, closest
+    monkeypatch.setattr(app_module, "lookup_entity", _raced)
+
+    body = _run(client, job_id).get_json()
+    assert (body["searched"], body["total"], body["done"]) == (1, 1, True)
+    assert len(storage.get_search(job_id)["results"]) == 1
 
 
 def test_unknown_job_pages(client):

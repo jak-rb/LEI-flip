@@ -42,6 +42,11 @@ logger = logging.getLogger(__name__)
 # "/styles.css" in both).
 app = Flask(__name__, static_folder="public", static_url_path="")
 
+# Render a missing value as an empty cell rather than the text "None":
+# many stored fields (a candidate's street, an ISIN-only input's
+# country) are legitimately null.
+app.jinja_env.finalize = lambda value: "" if value is None else value
+
 # Reject any request body larger than this. Flask raises HTTP 413
 # before the route runs, so an oversized upload is refused without
 # being read into memory. Vercel itself caps request bodies at 4.5 MB,
@@ -232,13 +237,17 @@ def run_job(job_id: str):
     Returns the job's progress (see ``_progress``); the browser keeps
     calling until ``done`` is true. A GLEIF outage saves whatever
     completed and answers 503 with an ``error`` message, so a later
-    call resumes from there.
+    call resumes from there. Two calls racing on one job (a second tab,
+    or a refresh while the previous call is still running) cannot store
+    an entity twice: the store only accepts rows that continue from the
+    result count this call started at.
     """
     search = storage.get_search(job_id)
     if search is None:
         return {"error": "not found"}, 404
 
-    pending = search["query"][len(search["results"]):]
+    offset = len(search["results"])
+    pending = search["query"][offset:]
     rows = []
     error = None
     started = time.monotonic()
@@ -255,7 +264,13 @@ def run_job(job_id: str):
         error = GLEIF_DOWN_MESSAGE
 
     if rows:
-        search = storage.append_results(job_id, rows) or search
+        # None: a rival call stored these entities first (or the job
+        # expired), so the store's own progress is what we report.
+        search = (
+            storage.append_results(job_id, rows, offset)
+            or storage.get_search(job_id)
+            or search
+        )
     progress = _progress(search)
     if error:
         return {"error": error, **progress}, 503

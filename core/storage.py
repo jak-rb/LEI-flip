@@ -170,29 +170,40 @@ def create_search(job_id: str, mode: str, query: list) -> None:
         )
 
 
-def append_results(job_id: str, rows: list) -> Optional[dict]:
+def append_results(
+    job_id: str, rows: list, offset: int
+) -> Optional[dict]:
     """Append looked-up entity rows to a search and advance its progress.
 
     Args:
         job_id: The search's id.
         rows: Per-entity result rows (JSON-serialisable), in query
-            order, continuing where the stored results end.
+            order, continuing the stored results at position ``offset``.
+        offset: How many results were stored when the caller picked the
+            entities these rows answer (``len(search["results"])``).
 
     Returns:
         The updated search (as ``get_search`` returns it), or None if
-        the job is missing or expired.
+        the job is missing or expired - or if the stored results have
+        already moved past ``offset``: another request (a second tab,
+        or a refresh mid-search) looked up the same entities first, so
+        these rows are dropped instead of being stored twice.
     """
     search = get_search(job_id)
-    if search is None:
+    if search is None or len(search["results"]) != offset:
         return None
     results = search["results"] + rows
     found = sum(1 for row in results if (row.get("match") or {}).get("lei"))
     with _connect() as conn:
-        conn.execute(
+        # The WHERE on ``searched`` makes the check-and-append atomic
+        # against a rival request that wrote between our read and now.
+        cursor = conn.execute(
             "UPDATE searches SET results = %s, searched = %s, found = %s "
-            "WHERE job_id = %s",
-            (json.dumps(results), len(results), found, job_id),
+            "WHERE job_id = %s AND searched = %s",
+            (json.dumps(results), len(results), found, job_id, offset),
         )
+        if cursor.rowcount != 1:
+            return None
     search.update(results=results, searched=len(results), found=found)
     return search
 

@@ -181,6 +181,7 @@ templates/         # Jinja2 templates
 public/            # static files, served by Vercel's CDN at the site root
   styles.css       # all styling
   app.js           # vanilla JS: dialogs, forms, job runner loop, validation stepper
+  img/             # RB logos (yellow-bar and black-bar variants) + theme icons
 tests/             # pytest: storage round-trips + route flows with GLEIF faked
 requirements.txt   # pinned runtime dependencies
 requirements-dev.txt
@@ -242,6 +243,22 @@ Excel downloads built by `core/export.py` (a confirmed pick exports as
 `MANUAL_MATCH`, a rejection as `MANUAL_NO_MATCH`). The overall percent shown
 per candidate is display-only (`core/lookup._overall_match`) and never gates
 a match.
+
+### Frontend
+
+- **Branding.** Raiffeisenbank brand palette only (rules in the header
+  comment of `public/styles.css`): one yellow, Off Black, Warm Grey
+  neutrals, system font stack, no webfonts or CDN assets.
+- **Theme.** Light/dark lives on `<html data-theme>`. An inline script
+  in `templates/base.html` resolves it before first paint: the explicit
+  choice in `localStorage["leiTheme"]`, else the OS colour scheme.
+- **Language (CZ/EN).** Lives on `<html lang>` (`localStorage["leiLang"]`,
+  default English). Server-rendered text carries both versions in
+  `data-cs` / `data-en` (for attributes: `data-cs-placeholder`,
+  `data-cs-title`, `data-cs-aria-label`); `applyLang()` in
+  `public/app.js` swaps them, and rich text uses `.only-cs` / `.only-en`
+  blocks. Strings the script writes itself live in its `STRINGS` table.
+  Every new user-visible string needs both languages.
 
 ### Deployment (Vercel)
 

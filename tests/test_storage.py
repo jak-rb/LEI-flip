@@ -35,16 +35,28 @@ def test_create_then_get_is_empty():
 
 def test_append_results_advances_progress_and_found():
     job_id = _job()
-    updated = storage.append_results(job_id, [_row(lei="L1")])
+    updated = storage.append_results(job_id, [_row(lei="L1")], 0)
     assert updated["searched"] == 1 and updated["found"] == 1
 
-    updated = storage.append_results(job_id, [_row()])
+    updated = storage.append_results(job_id, [_row()], 1)
     assert updated["searched"] == 2 and updated["found"] == 1
     assert storage.get_search(job_id)["results"] == updated["results"]
 
 
 def test_append_to_unknown_job_returns_none():
-    assert storage.append_results("nope", [_row()]) is None
+    assert storage.append_results("nope", [_row()], 0) is None
+
+
+def test_append_at_stale_offset_is_rejected():
+    # Two requests racing on one job both start from zero stored
+    # results; the one that loses must not store the entity twice.
+    job_id = _job()
+    assert storage.append_results(job_id, [_row(lei="L1")], 0) is not None
+    assert storage.append_results(job_id, [_row(lei="L1")], 0) is None
+    assert storage.get_search(job_id)["searched"] == 1
+
+    updated = storage.append_results(job_id, [_row()], 1)
+    assert updated["searched"] == 2
 
 
 def test_get_unknown_job_returns_none():
@@ -53,7 +65,7 @@ def test_get_unknown_job_returns_none():
 
 def test_record_decision_confirm_none_and_invalid():
     job_id = _job()
-    storage.append_results(job_id, [_row(closest=("C1", "C2"))])
+    storage.append_results(job_id, [_row(closest=("C1", "C2"))], 0)
 
     assert storage.record_decision(job_id, 0, "C2") == {
         "status": "confirmed", "lei": "C2",
