@@ -19,235 +19,6 @@ function setupDialog(buttonId, dialogId) {
     });
 }
 
-// ---- Detailed-results summary card ----
-// The search runs on the detail page: the card streams live progress, then
-// the page reloads as /results?job=... so the tables render underneath.
-
-// Handles to the summary card and its parts.
-function getResultEls() {
-    return {
-        card: document.getElementById("results-card"),
-        state: document.querySelector(".results-state-text"),
-        searched: document.getElementById("metric-searched"),
-        matched: document.getElementById("metric-matched"),
-        validate: document.getElementById("metric-validate"),
-        unmatched: document.getElementById("metric-unmatched"),
-    };
-}
-
-// Move the card into its "working" state: spinner spinning, counters reset.
-function startResults(els) {
-    if (!els.card) {
-        return;
-    }
-    els.card.hidden = false;
-    els.card.classList.remove("is-idle", "has-error", "no-matches");
-    els.card.classList.add("is-running");
-    els.card.setAttribute("aria-busy", "true");
-    if (els.state) {
-        els.state.textContent = "Searching…";
-    }
-    if (els.searched) {
-        els.searched.textContent = "0 / 0";
-    }
-    if (els.matched) {
-        els.matched.textContent = "0";
-    }
-    if (els.validate) {
-        els.validate.textContent = "0";
-    }
-    if (els.unmatched) {
-        els.unmatched.textContent = "0";
-    }
-}
-
-// Settle the card in place. Only reached as a fallback: normally a completed
-// search carries a job id and we reload the page instead (see handleEvent).
-function finishResults(els) {
-    if (!els.card) {
-        return;
-    }
-    els.card.classList.remove("is-running");
-    els.card.setAttribute("aria-busy", "false");
-    if (els.state) {
-        els.state.textContent = "Search complete";
-    }
-}
-
-// Show an error (e.g. GLEIF down, or the request failed) in the card.
-function showResultsError(els, message) {
-    if (!els.card) {
-        return;
-    }
-    els.card.hidden = false;
-    els.card.classList.remove("is-running", "no-matches", "is-idle");
-    els.card.classList.add("has-error");
-    els.card.setAttribute("aria-busy", "false");
-    if (els.state) {
-        els.state.textContent = message;
-    }
-}
-
-// Apply one progress event from the stream to the card.
-function handleEvent(els, event) {
-    if (event.error) {
-        showResultsError(els, event.error);
-        return;
-    }
-    if (els.searched) {
-        els.searched.textContent = `${event.searched} / ${event.total}`;
-    }
-    if (els.matched && event.matched != null) {
-        els.matched.textContent = event.matched;
-    }
-    if (els.validate && event.need_validation != null) {
-        els.validate.textContent = event.need_validation;
-    }
-    if (els.unmatched && event.unmatched != null) {
-        els.unmatched.textContent = event.unmatched;
-    }
-    if (event.done) {
-        // Reload the detail page in its final, server-rendered form so the
-        // matched / no-match / validation tables appear under the card.
-        if (event.job_id) {
-            window.location.replace(
-                "/results?job=" + encodeURIComponent(event.job_id),
-            );
-            return;
-        }
-        // No job id came back (should not happen): settle the card in place.
-        finishResults(els);
-    }
-}
-
-// Rebuild the FormData for the search carried over from the search page. A
-// single lookup carries its text fields; a bulk lookup carries the file as a
-// data: URL, which fetch() decodes back into a Blob here.
-async function buildSearchFormData(pending) {
-    const formData = new FormData();
-    formData.set("mode", pending.mode);
-
-    if (pending.mode === "bulk") {
-        const response = await fetch(pending.dataUrl);
-        const blob = await response.blob();
-        formData.set(
-            "file_upload", new File([blob], pending.filename || "upload"),
-        );
-        return formData;
-    }
-
-    for (const [key, value] of Object.entries(pending.fields || {})) {
-        if (value) {
-            formData.set(key, value);
-        }
-    }
-    return formData;
-}
-
-// Run the carried-over search, streaming NDJSON progress into the card.
-async function runPendingSearch(pending) {
-    const els = getResultEls();
-    startResults(els);
-
-    let formData;
-    try {
-        formData = await buildSearchFormData(pending);
-    } catch (error) {
-        showResultsError(
-            els, "Could not read the uploaded file. Please try again.",
-        );
-        return;
-    }
-
-    try {
-        const response = await fetch("/api/search", {
-            method: "POST",
-            body: formData,
-        });
-
-        // fetch() only rejects on a network failure, not on a 4xx/5xx status,
-        // so check the status ourselves to report a server error as one.
-        if (!response.ok) {
-            // 413 is the size cap (MAX_CONTENT_LENGTH) rejecting a large upload.
-            showResultsError(
-                els,
-                response.status === 413
-                    ? "That file is too large. The maximum upload size is 5 MB."
-                    : "The search failed on the server. Please try again.",
-            );
-            return;
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        for (;;) {
-            const { value, done } = await reader.read();
-            if (done) {
-                break;
-            }
-            buffer += decoder.decode(value, { stream: true });
-
-            let newline;
-            while ((newline = buffer.indexOf("\n")) >= 0) {
-                const line = buffer.slice(0, newline).trim();
-                buffer = buffer.slice(newline + 1);
-                if (line) {
-                    handleEvent(els, JSON.parse(line));
-                }
-            }
-        }
-
-        const rest = buffer.trim();
-        if (rest) {
-            handleEvent(els, JSON.parse(rest));
-        }
-    } catch (error) {
-        showResultsError(els, "Could not reach the server. Please try again.");
-    }
-}
-
-// On the detail page, either run the search handed over from the search page
-// or, if there is nothing to show, reveal the empty-state note. No-ops on any
-// page without the card (e.g. the search page itself).
-function initResultsPage() {
-    const card = document.getElementById("results-card");
-    if (!card) {
-        return;
-    }
-    // A stored job is already rendered server-side; nothing to stream.
-    if (card.dataset.hasJob === "true") {
-        return;
-    }
-
-    // Read the pending search once, so a reload does not re-run it.
-    const raw = sessionStorage.getItem("pendingSearch");
-    if (raw) {
-        sessionStorage.removeItem("pendingSearch");
-    }
-    let pending = null;
-    if (raw) {
-        try {
-            pending = JSON.parse(raw);
-        } catch (error) {
-            pending = null;
-        }
-    }
-
-    if (!pending) {
-        // Reached /results with nothing to search (e.g. an expired link).
-        card.hidden = true;
-        const note = document.getElementById("empty-note");
-        if (note) {
-            note.hidden = false;
-        }
-        return;
-    }
-
-    runPendingSearch(pending);
-}
-
 // ---- Search-page forms ----
 
 // Show/clear the red validation message that sits next to a Search button.
@@ -262,12 +33,51 @@ function clearFormError(form) {
     showFormError(form, "");
 }
 
-// Hand a search off to the detail page: stash the input in sessionStorage
-// (which survives the navigation) and go to /results, where the streaming
-// search actually runs.
-function startSearch(pending) {
-    sessionStorage.setItem("pendingSearch", JSON.stringify(pending));
-    window.location.href = "/results";
+// Create the search job on the server and go to its results page, where the
+// lookup itself runs step by step (see runJob). Input the server rejects
+// (400) shows its message next to the Search button instead. Search is
+// disabled meanwhile so a second click cannot create a duplicate job.
+async function submitSearch(form, formData) {
+    const submitBtn = form.querySelector("button[type=submit]");
+    if (submitBtn) {
+        submitBtn.disabled = true;
+    }
+    try {
+        const response = await fetch("/api/jobs", {
+            method: "POST",
+            body: formData,
+        });
+        // 413 is the size cap rejecting a large upload (Flask's
+        // MAX_CONTENT_LENGTH, or Vercel's own request body limit).
+        if (response.status === 413) {
+            showFormError(
+                form, "That file is too large. The maximum upload size is 4 MB.",
+            );
+            return;
+        }
+        let data = null;
+        try {
+            data = await response.json();
+        } catch (error) {
+            data = null;
+        }
+        if (!response.ok || !data || !data.job_id) {
+            showFormError(
+                form,
+                (data && data.error)
+                    || "The search could not be started. Please try again.",
+            );
+            return;
+        }
+        window.location.href =
+            "/results?job=" + encodeURIComponent(data.job_id);
+    } catch (error) {
+        showFormError(form, "Could not reach the server. Please try again.");
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+        }
+    }
 }
 
 // Single lookup: a name or an ISIN is required (either is enough). We validate
@@ -306,8 +116,9 @@ function setupSingleForm() {
             return;
         }
         clearFormError(form);
-        const fields = Object.fromEntries(new FormData(form));
-        startSearch({ mode: "single", fields });
+        const formData = new FormData(form);
+        formData.set("mode", "single");
+        submitSearch(form, formData);
     });
 }
 
@@ -418,7 +229,7 @@ function setupBulkForm() {
         });
     }
 
-    form.addEventListener("submit", async (event) => {
+    form.addEventListener("submit", (event) => {
         event.preventDefault();
         const file = fileInput && fileInput.files[0];
         if (!file) {
@@ -426,75 +237,122 @@ function setupBulkForm() {
             return;
         }
         clearFormError(form);
-
-        // Ask the server to check the file before we leave this page, so a
-        // problem (wrong type, empty, no usable rows, too many rows) shows
-        // here next to Search rather than on the results page. Counting the
-        // rows means reading the file, and an .xlsx cannot be read in the
-        // browser without an extra library, so the server (which already
-        // has the parser) does the check. Disable Search meanwhile so a
-        // second click cannot fire a duplicate request.
-        const submitBtn = form.querySelector("button[type=submit]");
-        if (submitBtn) {
-            submitBtn.disabled = true;
-        }
-        try {
-            const check = new FormData();
-            check.set("file_upload", file);
-            const response = await fetch("/api/validate-upload", {
-                method: "POST",
-                body: check,
-            });
-            if (response.status === 413) {
-                showFormError(
-                    form,
-                    "That file is too large. The maximum upload size is 5 MB.",
-                );
-                return;
-            }
-            if (!response.ok) {
-                showFormError(form, "Could not check the file. Please try again.");
-                return;
-            }
-            const result = await response.json();
-            if (!result.ok) {
-                showFormError(form, result.error);
-                return;
-            }
-        } catch (error) {
-            showFormError(form, "Could not reach the server. Please try again.");
-            return;
-        } finally {
-            if (submitBtn) {
-                submitBtn.disabled = false;
-            }
-        }
-
-        // The file is valid: read it into a data: URL so it survives the
-        // navigation to the detail page (a File object cannot be stored
-        // directly).
-        const reader = new FileReader();
-        reader.onload = () => {
-            try {
-                startSearch({
-                    mode: "bulk",
-                    filename: file.name,
-                    dataUrl: reader.result,
-                });
-            } catch (error) {
-                showFormError(
-                    form, "That file is too large to open in the browser.",
-                );
-            }
-        };
-        reader.onerror = () => {
-            showFormError(form, "Could not read the file. Please try again.");
-        };
-        reader.readAsDataURL(file);
+        // The server parses the file when it creates the job, so a problem
+        // (wrong type, empty, no usable rows, too many rows) comes straight
+        // back as the 400 message shown next to Search.
+        const formData = new FormData();
+        formData.set("mode", "bulk");
+        formData.set("file_upload", file);
+        submitSearch(form, formData);
     });
 }
 
-// ---- Detailed-results validation stepper (the /results page) ----
+// ---- Results summary card (the /results page) ----
+// A job whose lookup is not finished renders the card in its running state;
+// the page then drives the lookup step by step and reloads once it is done so
+// the server renders the tables underneath.
+
+// Handles to the summary card and its parts.
+function getResultEls() {
+    return {
+        card: document.getElementById("results-card"),
+        state: document.querySelector(".results-state-text"),
+        searched: document.getElementById("metric-searched"),
+        matched: document.getElementById("metric-matched"),
+        validate: document.getElementById("metric-validate"),
+        unmatched: document.getElementById("metric-unmatched"),
+    };
+}
+
+// Apply one progress response to the card's counters.
+function applyProgress(els, progress) {
+    if (els.searched) {
+        els.searched.textContent = `${progress.searched} / ${progress.total}`;
+    }
+    if (els.matched && progress.matched != null) {
+        els.matched.textContent = progress.matched;
+    }
+    if (els.validate && progress.need_validation != null) {
+        els.validate.textContent = progress.need_validation;
+    }
+    if (els.unmatched && progress.unmatched != null) {
+        els.unmatched.textContent = progress.unmatched;
+    }
+}
+
+// Show an error (e.g. GLEIF down, or the request failed) in the card. The
+// job keeps its saved progress, so reloading the page resumes the lookup.
+function showResultsError(els, message) {
+    if (!els.card) {
+        return;
+    }
+    els.card.classList.remove("is-running", "no-matches");
+    els.card.classList.add("has-error");
+    els.card.setAttribute("aria-busy", "false");
+    if (els.state) {
+        els.state.textContent = message;
+    }
+}
+
+// Drive a job to completion: each /run call looks up the next few entities
+// and returns the counts so far. When done, reload the page in its final,
+// server-rendered form so the tables appear under the card.
+async function runJob(jobId) {
+    const els = getResultEls();
+    const url = "/api/jobs/" + encodeURIComponent(jobId) + "/run";
+
+    for (;;) {
+        let response;
+        try {
+            response = await fetch(url, { method: "POST" });
+        } catch (error) {
+            showResultsError(
+                els,
+                "Could not reach the server. Reload the page to resume.",
+            );
+            return;
+        }
+
+        let data = null;
+        try {
+            data = await response.json();
+        } catch (error) {
+            data = null;
+        }
+        if (data && data.searched != null) {
+            applyProgress(els, data);
+        }
+
+        // fetch() only rejects on a network failure, not on a 4xx/5xx status,
+        // so check the status ourselves to report a server error as one.
+        if (!response.ok || !data) {
+            const reason = (data && data.error)
+                || "The search failed on the server.";
+            showResultsError(els, reason + " Reload the page to resume.");
+            return;
+        }
+
+        if (data.done) {
+            window.location.replace(
+                "/results?job=" + encodeURIComponent(jobId),
+            );
+            return;
+        }
+    }
+}
+
+// On the results page, continue a job whose lookup is still running. No-ops
+// on a finished job (its tables are already rendered) and on pages without
+// the card (e.g. the search page itself).
+function initResultsPage() {
+    const card = document.getElementById("results-card");
+    if (!card || card.dataset.running !== "true") {
+        return;
+    }
+    runJob(card.dataset.job);
+}
+
+// ---- Validation stepper (the /results page) ----
 // Review one near-miss record at a time: pick the correct candidate (or
 // "None of these"), which is saved to the server so the tables and the
 // downloads reflect it. Arrows move between records. No-ops on any page

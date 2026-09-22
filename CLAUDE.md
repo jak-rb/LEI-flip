@@ -105,197 +105,174 @@ structure, conventions, current state, …) after it.
 LEI lookup is a small web tool for finding a company's Legal Entity Identifier
 (LEI) in the [GLEIF](https://www.gleif.org/) database. A user can either run a
 single lookup (enter an entity name or an ISIN, optionally with address fields
-to narrow
-the result) or a bulk lookup by uploading an `.xlsx` or `.csv` file of entities.
+to narrow the result) or a bulk lookup by uploading an `.xlsx` or `.csv` file
+of entities.
 
-It is a fresh, deliberately lean rebuild based on the core of the original LEI
-lookup tool created by Jakub Schrimpel. The goal is to keep that core while
-dropping the heavier infrastructure for simplicity.
+It is a lean rebuild based on the core of the original LEI lookup tool created
+by Jakub Schrimpel: the precision-first matcher and GLEIF/ISIN resolution are
+kept as-is, and the app now lives on Vercel (Python runtime, Neon Postgres)
+with no dependency on the bank's CodeNOW platform, which it was first built
+for.
 
 ### Tech stack
 
-- **Python 3.12** (matches the CodeNow runtime image
-  `python:3.12.6-slim-bullseye`)
-- **pip** with a pinned `requirements.txt` for dependency management
-- **Flask** for the web server and Jinja2 templates
-- **waitress** as the production WSGI server on CodeNow
-- **python-json-logger** for structured JSON logging (CodeNow log aggregation)
-- **openpyxl** for generating the Excel (`.xlsx`) export
-- **pydantic** for the core data models (`InputEntity`, `LookupResult`, …)
-- **requests** for the (synchronous) HTTP calls to the GLEIF API
-- **rapidfuzz** for fuzzy name/address scoring, and **unidecode** for stripping
-  diacritics during normalization
-- Plain HTML/CSS frontend with vanilla JavaScript, no framework. Submitting a
-  search on the index page stashes the input in `sessionStorage` and redirects
-  to `/results`, which runs the lookup as an async streaming flow: it `fetch`es
-  `/api/search` and reads newline-delimited JSON (NDJSON) progress events to
-  update the summary card live, then reloads as `/results?job=...` to render the
-  detailed tables.
+- **Python 3.12** on Vercel's Python runtime (pinned in `.python-version`;
+  locally any 3.12+ works)
+- **pip** with a pinned `requirements.txt` (runtime) and
+  `requirements-dev.txt` (adds pytest)
+- **Flask** for the web layer and Jinja2 templates; Vercel loads the `app`
+  instance from `app.py` with zero configuration
+- **psycopg[binary]** for the Postgres (Neon) search store on Vercel; the
+  same module falls back to stdlib **sqlite3** locally (see `core/storage.py`)
+- **openpyxl** for reading bulk `.xlsx` uploads and writing the Excel export
+- **pydantic** for the core data models (`InputEntity`, `LookupResult`, ...)
+- **requests** for the synchronous HTTP calls to GLEIF and OpenFIGI
+- **rapidfuzz** for fuzzy name/address scoring, and **unidecode** for
+  stripping diacritics during normalization
+- Plain HTML/CSS frontend with vanilla JavaScript, no framework. Static files
+  live in `public/`, which Vercel's CDN serves at the site root; Flask is
+  configured to serve the same folder at the same paths locally.
 
 ### Commands
 
-Create the virtual environment and install dependencies from the project
-root, then run the app from `src/`:
+From the project root:
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt   # install dependencies
+.venv\Scripts\pip install -r requirements-dev.txt
 
-cd src
-python app.py                       # dev server on http://localhost:8080
-waitress-serve --port=8080 app:app  # production-style run (WSGI)
+.venv\Scripts\python app.py            # dev server on http://localhost:8080
+.venv\Scripts\python -m pytest -q      # test suite (SQLite store, faked GLEIF)
+
+vercel deploy                          # preview deployment
+vercel deploy --prod                   # production deployment
+vercel env pull .env.local             # fetch DATABASE_URL etc. for local use
 ```
 
-The app imports its packages as `core.*` and resolves `templates/`,
-`static/`, and `data/` relative to `src/`, so start it from inside `src/`.
+Run the app from the project root (not from a subfolder): the `core`
+package, `templates/`, `public/` and `data/` all resolve from there. With no
+`DATABASE_URL` in the environment the store is a local SQLite file, so a
+fresh clone runs with no setup.
 
 ### Project structure
 
 ```
-src/               # all application code (run the app from here)
-  app.py           # Flask app and routes (entry point)
-  core/            # backend lookup logic (ported + simplified from the original)
-    constants.py   # matcher thresholds and GLEIF settings (plain constants)
-    models.py      # pydantic data models (InputEntity, GleifCandidate, …)
-    address.py     # name/address normalization and country -> ISO conversion
-    matcher.py     # precision-first fuzzy name + address scoring
-    gleif.py       # synchronous GLEIF API client (requests, retry/backoff)
-    lookup.py      # single-entity pipeline: search -> score -> classify
-    isin.py        # ISIN validation + LEI resolution/corroboration
-    openfigi.py    # OpenFIGI client: ISIN -> issuer name(s) (ISIN fallback)
-    storage.py     # SQLite store: one `searches` table (query + results) + decisions
-    export.py      # build CSV / Excel from a search (reflects manual decisions)
-    upload.py      # parse an uploaded .xlsx/.csv into entities (bulk)
-  data/            # read-only lookup tables (committed)
-    country_mapping.json  # country name (cs/en) -> ISO alpha-2 code
-    legal_forms.txt       # legal-form suffixes stripped before name matching
-  templates/       # Jinja2 templates
-    base.html      # shared layout (header, Help/Report-bugs dialogs, page shell)
-    index.html     # single + bulk lookup forms (search hands off to /results)
-    results.html   # detail page (/results): summary card, validation stepper, result tables
-    admin.html     # hidden /admin page: full dump of the searches table (no auth, unlinked)
-  static/
-    styles.css     # all styling
-    app.js         # vanilla JS: dialogs, forms, search hand-off + streaming card, validation stepper
-requirements.txt   # pinned pip dependencies
-.codenow.yaml      # CodeNow build/runtime config (python pip-app pipelines)
-codenow/config/    # platform config, incl. the JSON log config (log-config.json)
-.run/              # PyCharm run + mirrord configs (working dir src/)
-sonar-project.properties  # SonarQube coverage report path
+app.py             # Flask app + routes (entry point; Vercel loads `app`)
+core/              # backend lookup logic (ported + simplified from the original)
+  constants.py     # matcher thresholds and GLEIF settings (plain constants)
+  models.py        # pydantic data models (InputEntity, GleifCandidate, ...)
+  address.py       # name/address normalization and country -> ISO conversion
+  matcher.py       # precision-first fuzzy name + address scoring
+  gleif.py         # synchronous GLEIF API client (requests, retry/backoff)
+  lookup.py        # single-entity pipeline: search -> score -> classify
+  isin.py          # ISIN validation + LEI resolution/corroboration
+  openfigi.py      # OpenFIGI client: ISIN -> issuer name(s) (ISIN fallback)
+  storage.py       # search store: one `searches` table on Postgres or SQLite
+  export.py        # build CSV / Excel from a search (reflects manual decisions)
+  upload.py        # parse an uploaded .xlsx/.csv into entities (bulk)
+data/              # read-only lookup tables (committed)
+  country_mapping.json  # country name (cs/en) -> ISO alpha-2 code
+  legal_forms.txt       # legal-form suffixes stripped before name matching
+templates/         # Jinja2 templates
+  base.html        # shared layout (header, Help/Report-bugs dialogs, page shell)
+  index.html       # single + bulk lookup forms (submit creates a job, goes to /results)
+  results.html     # /results: summary card (live while running), stepper, tables
+  admin.html       # hidden /admin page: full dump of the searches table (no auth)
+public/            # static files, served by Vercel's CDN at the site root
+  styles.css       # all styling
+  app.js           # vanilla JS: dialogs, forms, job runner loop, validation stepper
+tests/             # pytest: storage round-trips + route flows with GLEIF faked
+requirements.txt   # pinned runtime dependencies
+requirements-dev.txt
+vercel.json        # function config: maxDuration 300 s, files excluded from the bundle
+.python-version    # 3.12
+.vercelignore      # keeps .venv, tests, docs out of the upload
 docs/              # project docs (present on disk, gitignored)
-  PLAN.md          # open items still to review/adjust (build is done)
-  HOW.md           # how the matcher works + how every percentage is computed
 ```
 
 ### Backend
 
-The web layer is fully real (nothing stubbed). `src/app.py` exposes a streaming
-search endpoint (`POST /api/search`, NDJSON progress events), a bulk-file
-pre-flight check (`POST /api/validate-upload`), CSV/Excel download endpoints,
-the `/results` page, `POST /api/decision`, a hidden, unlinked `/admin` page
-that dumps the whole `searches` table (no auth), and a `GET /health` liveness
-probe for the platform. At import it configures structured JSON logging (from
-`codenow/config/log-config.json`) and echoes B3 (`X-B3-*`) trace headers back
-on every response, both for CodeNow.
+**A search is a job run in short steps.** Vercel runs the app as a function
+with a hard time limit (300 s on Hobby) and no long-lived process, so the old
+single streaming request that looked up a whole bulk file is gone. Instead:
 
-**Search runs on the detail page.** Submitting either form validates the input,
-stashes it in `sessionStorage`, and navigates to `/results` (a bulk file is
-carried as a `data:` URL, since a File cannot survive the navigation). The
-detail page reads the stashed input, POSTs it to `/api/search`, streams the
-lookup into the summary card at the top, then reloads as `/results?job=...` so
-the server renders the detailed tables. "Back to search" returns to a clean
-index with no job.
+1. `POST /api/jobs` validates the input (single form fields, or an uploaded
+   `.xlsx`/`.csv` parsed by `core/upload.py` - positional columns, 100-entity
+   cap) and stores the entities to look up under a new `job_id` via
+   `core/storage.create_search`. Nothing is looked up yet. Unusable input
+   returns 400 with an `error` message the search page shows next to its
+   Search button (this replaced the separate pre-flight endpoint).
+2. The browser navigates to `/results?job=<id>`. For an unfinished job the
+   page renders the summary card in its running state and `public/app.js`
+   calls `POST /api/jobs/<id>/run` in a loop.
+3. Each `/run` call looks up the next pending entities (at most
+   `RUN_CHUNK_SIZE`, stopping early once `RUN_TIME_BUDGET_SECONDS` have
+   passed) against live GLEIF with `core/lookup.py`, appends their result rows
+   with `storage.append_results`, and returns the progress: `searched`,
+   `total`, the matched / need-validation / unmatched counts, and `done`.
+   A GLEIF outage saves whatever completed and answers 503 with an `error`;
+   the card shows it and a reload resumes from the saved progress.
+4. When `done` the page reloads and the server renders the detailed tables.
 
-**Single and bulk lookups are real.** `/api/search` builds `InputEntity` objects
-(single form, or `core/upload.py` parsing an `.xlsx`/`.csv` - positional columns,
-100-entity cap), runs `core/lookup.py` against the live GLEIF API, and streams
-per-entity progress bucketed into matched / need-validation / unmatched counts;
-a GLEIF outage streams the red error state. Each search is **persisted**: it
-mints a `job_id` and writes one row to the single `searches` table via
-`core/storage.py` - the `query` (what the user searched, as JSON) plus, per
-entity, its matched result and 3 closest candidates - then returns the
-`job_id` in the done event. ISIN resolution is wired in: when
-name+address yields no confident match, a validated ISIN (`core/isin.py`) can
-find a LEI directly, corroborate a near-miss, or - as a last resort - be
-resolved to an issuer name via OpenFIGI (`core/openfigi.py`) and re-searched in
-GLEIF, accepted only when the typed name and the OpenFIGI name both match. An
-input needs a name or an ISIN (or both). When only an ISIN is given, resolution
-is by ISIN alone: GLEIF's authoritative ISIN->LEI mapping (`lookup_by_isin`)
-auto-asserts a confident match, and if the ISIN is not in that mapping an
-OpenFIGI review surfaces candidates for manual confirmation.
+Each stored result row is the entity's `input`, its `match` (a `LookupResult`)
+and up to 3 `closest` candidates for manual review
+(`core/lookup.CLOSEST_CANDIDATE_LIMIT`). ISIN resolution is unchanged from the
+original: when name+address yields no confident match, a validated ISIN
+(`core/isin.py`) can find a LEI directly, corroborate a near-miss, or - as a
+last resort - be resolved to an issuer name via OpenFIGI (`core/openfigi.py`)
+and re-searched; an ISIN-only input is resolved by GLEIF's authoritative ISIN
+mapping, with an OpenFIGI review fallback.
 
-The CSV and Excel **downloads are real**: `/download/csv?job=` and
-`/download/excel?job=` stream a file built by `core/export.py`: one row per
-entity with structured columns (input fields, LEI / status / match type /
-confidence, the per-field scores, GLEIF name and addresses, warnings, notes)
-and a spreadsheet formula-injection guard, reflecting any manual decision
-(`MANUAL_MATCH` for a confirmed pick, `MANUAL_NO_MATCH` for a rejection). A
-missing job returns 404.
+**The store** (`core/storage.py`) is one `searches` table: `job_id`,
+`created_at` (ISO-8601 UTC text), `mode`, `searched` (entities looked up so
+far), `found` (asserted matches so far), `query` (the entities, JSON) and
+`results` (the rows, JSON). Rows older than 30 days are pruned on every write.
+The backend is chosen at import from the environment: `DATABASE_URL` (or
+`POSTGRES_URL`) selects Postgres through psycopg, otherwise SQLite at
+`LEI_DB_PATH` or under the system temp dir. Both share one DDL and one set of
+`%s`-placeholder statements (rewritten to `?` for SQLite); the schema is
+created lazily on first use, once per process.
 
-**The `/results` page.** A summary card at the top shows four counts that
-partition every searched entity - Searched (`x / total`), Matched (green), Need
-validation (orange), Unmatched (red) - with "Back to search" on its left and the
-downloads on its right; its header reads "Search complete", "Needs review", or
-"No matches found". Below it, three zones render: an orange "To validate (N)"
-**stepper** (near-misses one at a time, top 3 candidates, arrows to navigate, N
-counts down as decisions are made), a green "Matched records" table, and a red
-"No matches" table. Candidate rows and the matched table show Legal name /
-Country / City / Street / a GLEIF link / an **overall match percent**; candidate
-rows are sorted by that percent (highest first), and the percent and the confirm
-button stay pinned to the right as a row scrolls. Each candidate row has a left
-chevron expanding to its full legal + HQ addresses and per-field scores. The overall percent is a display-only, name-weighted (60/40)
-blend of name and address agreement (`core/lookup._overall_match`) and never
-gates a match. Confirming a candidate or "none" is saved via
-`POST /api/decision` (`core/storage.record_decision`), which only flags the
-choice on that entity's stored row (no candidate data is duplicated), so the
-tables and downloads reflect it. `core/lookup.CLOSEST_CANDIDATE_LIMIT` is 3.
+**The `/results` page, decisions and downloads** work as before: a summary
+card with the four counts (Searched `x / total`, Matched, Need validation,
+Unmatched), the orange validation stepper (top 3 candidates per near-miss,
+confirm one or "None of these", saved via `POST /api/decision` ->
+`storage.record_decision`), the matched and no-match tables, and the CSV /
+Excel downloads built by `core/export.py` (a confirmed pick exports as
+`MANUAL_MATCH`, a rejection as `MANUAL_NO_MATCH`). The overall percent shown
+per candidate is display-only (`core/lookup._overall_match`) and never gates
+a match.
 
-The backend was ported and simplified from the original tool at
-`../kuba_repository/lei-lookup-tool/` (Jakub Schrimpel's FastAPI version). It
-keeps that tool's core - the precision-first matcher, the GLEIF search
-strategies, ISIN resolution (including the OpenFIGI fallback), and the lookup
-tables - but switches to synchronous Flask, stays LLM-free, and leaves out the
-heavier infrastructure the original carried (the persistent SQLite response
-cache, containerised deployment). The original remains the reference for
-matching behaviour.
+### Deployment (Vercel)
+
+- The project is deployed from this repository with the Vercel CLI
+  (`vercel deploy` / `vercel deploy --prod`) or Git integration. Vercel
+  detects Flask from `app.py` and `requirements.txt`; no build step.
+- `vercel.json` sets `maxDuration: 300` for `app.py` and excludes
+  `tests/`, `docs/`, `.venv/` and `__pycache__` from the bundle;
+  `.vercelignore` keeps them out of the upload.
+- Environment variables: `DATABASE_URL` (injected by the Neon integration
+  added from the project's Storage tab), optional `OPENFIGI_API_KEY`.
+- Limits that shaped the design: request bodies max 4.5 MB (so uploads are
+  capped at 4 MB via `MAX_CONTENT_LENGTH`), 300 s per function invocation
+  (hence the chunked `/run` loop), no writable persistent disk (hence
+  Postgres), and Flask's `static_folder` is not served in production (hence
+  `public/`).
+- Dropped with the move off CodeNOW: `.codenow.yaml`, the `codenow/` JSON log
+  config (now `logging.basicConfig`), the B3 trace-header echo, waitress,
+  the PyCharm/mirrord run configs and the Sonar properties file.
 
 ### Current state
 
-The app is feature-complete and nothing is stubbed. Single and bulk search run
-against the live GLEIF pipeline (by name, by ISIN, or both - including ISIN
-resolution and an ISIN-only path), each search is persisted to SQLite under a
-`job_id`, and the `/results` page, its manual-validation workflow, and the
-CSV/Excel downloads are all real.
+Feature-complete and deployable. Single and bulk search run against live
+GLEIF through the job endpoints, every search is persisted under a `job_id`
+(Postgres on Vercel, SQLite locally), and the results page, the manual
+validation workflow and the CSV/Excel downloads are real. `tests/` covers the
+store and the route flows with GLEIF faked; run it before every change to the
+web layer. Matching behaviour (thresholds in `core/constants.py`) is
+audit-validated and unchanged from the CodeNOW version - re-run the matcher
+audit before tuning it.
 
-Frontend behaviour: the Help ("?") and "Report bugs" header buttons open
-`<dialog>` popups (`base.html`); the Help dialog walks through the single and
-bulk lookups and choosing the right candidate in the validation step; its intro
-notes the OpenFIGI fallback used when an ISIN is not found directly in GLEIF. Both lookup
-forms validate input (single: a name or an ISIN required; bulk: one
-`.xlsx`/`.csv`, added by click or drag-and-drop, with a remove button; the bulk
-file is pre-flighted server-side via `/api/validate-upload`, so file problems -
-wrong type, empty, no usable rows, over the 100-entity cap - surface as red text
-by the Search button) and, on submit, hand the search off to
-`/results` (see Backend). The detail page streams
-live progress into the summary card - the four counts, an animating spinner, and
-the state header - and reports GLEIF-down, server, and connection failures with
-distinct messages, then reloads as `/results?job=...` to render the tables.
-
-What remains is tracked in `docs/PLAN.md`: the matching-quality review and
-production hardening (disabling proxy response buffering so the NDJSON search
-stream reaches the browser live). This repo is CodeNow-deployable: the app
-lives under `src/` (entry `src/app.py`) with the platform's JSON logging,
-`GET /health`, and B3 trace headers, and runs via pip + `requirements.txt` +
-waitress on the `python:3.12.6-slim-bullseye` image (see `.codenow.yaml`).
-
-The SQLite store lives on a **writable** path resolved by
-`core/storage._resolve_db_path`: the `LEI_DB_PATH` env var if set, else a
-folder under the system temp dir. It is deliberately NOT written beside the
-committed lookup tables in the app's `data/` folder: the CodeNow image
-filesystem is read-only, so creating the DB there crashed startup with
-`sqlite3.OperationalError: unable to open database file`. Point `LEI_DB_PATH`
-at a mounted persistent volume for the 30-day search history to survive
-redeploys (the temp-dir default keeps the app running but is ephemeral).
-
-The earlier separate `../lei-lookup1/` scaffolding copy has been folded into
-this repo and is now redundant.
+An optional LLM-assisted step (e.g. helping disambiguate near-misses) is a
+possible next addition; it would plug in after `core/lookup.lookup_entity`
+returns and must never override the precision-first assertion rules.

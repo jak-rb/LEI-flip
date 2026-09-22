@@ -5,6 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
 
 # Virtual environments
 .venv
@@ -12,8 +13,15 @@ wheels/
 # Logs
 *.log
 
-# SQLite store (runtime per-search results; created on first run)
-src/data/lei_lookup.db
+# Local SQLite store (only used when DATABASE_URL is unset)
+*.db
+
+# Vercel project link and pulled environment files
+.vercel
+.env*
 
 # Supports
 docs/
+
+# Local editor/agent config
+.claude/

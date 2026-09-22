@@ -1,113 +1,113 @@
 # LEI lookup
 
-A small internal web tool for finding a company's Legal Entity Identifier
-(LEI) in the [GLEIF](https://www.gleif.org/) database. A user can run a
-single lookup (an entity name or an ISIN, optionally with address fields
-to narrow the result) or a bulk lookup by uploading an `.xlsx`/`.csv`
-file of entities. Matching is deterministic and precision-first (no LLM):
-it asserts a LEI only when the name and legal address agree, or an ISIN
-resolves the identity; weaker hits are surfaced for manual review.
+A small web tool for finding a company's Legal Entity Identifier (LEI)
+in the [GLEIF](https://www.gleif.org/) database. A user can run a
+single lookup (an entity name or an ISIN, optionally with address
+fields to narrow the result) or a bulk lookup by uploading an
+`.xlsx`/`.csv` file of entities. Matching is deterministic and
+precision-first (no LLM): it asserts a LEI only when the name and legal
+address agree, or an ISIN resolves the identity; weaker hits are
+surfaced for manual review.
+
+The app is a Flask application deployed on [Vercel](https://vercel.com)
+(Python runtime) with a Neon Postgres store for the 30-day search
+history. It runs locally with no setup, falling back to SQLite.
 
 ## Endpoints
 
 | Route | Purpose |
 |---|---|
 | `GET /` | Single + bulk lookup forms |
-| `GET /results?job=<id>` | Detailed results for a stored search |
-| `POST /api/search` | Run a lookup; streams NDJSON progress events |
-| `POST /api/validate-upload` | Pre-flight check of a bulk file |
+| `POST /api/jobs` | Create a search job (validates the input, stores the entities) |
+| `POST /api/jobs/<id>/run` | Look up the next few pending entities; returns progress |
+| `GET /results?job=<id>` | Results page (live progress while running, tables when done) |
 | `POST /api/decision` | Record a manual match decision |
 | `GET /download/csv?job=<id>` | Export a search as CSV |
 | `GET /download/excel?job=<id>` | Export a search as Excel |
 | `GET /admin` | Full dump of the `searches` table (internal, unlinked) |
-| `GET /health` | Liveness/readiness probe (returns `{"status": "UP"}`) |
+| `GET /health` | Liveness probe (returns `{"status": "UP"}`) |
+
+A search runs as short, resumable steps rather than one long request:
+the search page creates a job and navigates to its results page, whose
+script calls `/run` until the job reports `done`, then reloads to render
+the tables. Each `/run` call looks up at most a few entities (and stops
+early after a time budget), so no request comes near Vercel's function
+limit, and a page refresh mid-search simply resumes.
 
 ## Project layout
 
 ```
-src/
-  app.py            # Flask app + routes (entry point)
-  core/             # backend lookup logic
-    constants.py    # matcher thresholds + GLEIF settings
-    models.py       # pydantic models (InputEntity, LookupResult, ...)
-    address.py      # name/address normalization, country -> ISO
-    matcher.py      # precision-first fuzzy name + address scoring
-    gleif.py        # GLEIF API client (requests, retry/backoff)
-    lookup.py       # single-entity pipeline: search -> score -> classify
-    isin.py         # ISIN validation + LEI resolution/corroboration
-    openfigi.py     # OpenFIGI client: ISIN -> issuer name (fallback)
-    storage.py      # SQLite store: one `searches` table
-    export.py       # build CSV / Excel from a stored search
-    upload.py       # parse an uploaded .xlsx/.csv into entities
-  data/             # committed lookup tables + runtime SQLite store
-    country_mapping.json   # country name (cs/en) -> ISO alpha-2
-    legal_forms.txt        # legal-form suffixes stripped before matching
-    lei_lookup.db          # runtime store (created on first run; gitignored)
-  templates/        # Jinja2 templates (base, index, results, admin)
-  static/           # styles.css, app.js
-codenow/config/     # platform config, incl. JSON log config
-requirements.txt    # pip dependencies
+app.py              # Flask app + routes (Vercel entrypoint: exposes `app`)
+core/               # backend lookup logic
+  constants.py      # matcher thresholds + GLEIF settings
+  models.py         # pydantic models (InputEntity, LookupResult, ...)
+  address.py        # name/address normalization, country -> ISO
+  matcher.py        # precision-first fuzzy name + address scoring
+  gleif.py          # GLEIF API client (requests, retry/backoff)
+  lookup.py         # single-entity pipeline: search -> score -> classify
+  isin.py           # ISIN validation + LEI resolution/corroboration
+  openfigi.py       # OpenFIGI client: ISIN -> issuer name (fallback)
+  storage.py        # search store: Postgres (DATABASE_URL) or SQLite
+  export.py         # build CSV / Excel from a stored search
+  upload.py         # parse an uploaded .xlsx/.csv into entities
+data/               # committed lookup tables
+  country_mapping.json   # country name (cs/en) -> ISO alpha-2
+  legal_forms.txt        # legal-form suffixes stripped before matching
+templates/          # Jinja2 templates (base, index, results, admin)
+public/             # styles.css, app.js (served by Vercel's CDN at /)
+tests/              # pytest suite (SQLite store, faked GLEIF)
+requirements.txt    # runtime dependencies
+requirements-dev.txt
+vercel.json         # function config (maxDuration, excluded files)
+.python-version     # Python 3.12 (Vercel runtime)
 ```
 
 ## Running locally
 
-From the repository root, create a virtual environment and install the
-dependencies, then start the app from `src/`:
-
 ```bash
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt   # Windows
-# source .venv/bin/activate && pip install -r requirements.txt  # Linux/macOS
+.venv/Scripts/pip install -r requirements-dev.txt   # Windows
+# source .venv/bin/activate && pip install -r requirements-dev.txt  # Linux/macOS
 
-cd src
-python app.py                 # dev server on http://localhost:8080
+.venv/Scripts/python app.py      # http://localhost:8080, SQLite store
+.venv/Scripts/python -m pytest -q
 ```
 
-For a production-style run, use the bundled waitress server instead of
-Flask's dev server (run from `src/`, where `app:app` is importable):
-
-```bash
-cd src
-waitress-serve --port=8080 app:app
-```
+Without `DATABASE_URL` the store is a SQLite file (`LEI_DB_PATH`, or a
+`lei-lookup/` folder under the system temp directory). To run against
+the real Postgres store, export `DATABASE_URL` in the shell first (for
+example the value from `vercel env pull .env.local`).
 
 ## Configuration
 
-- **Logging.** Structured JSON logging is configured at startup from
-  `codenow/config/log-config.json` (python-json-logger), so container
-  output is parseable by the platform's log aggregation.
-- **Database location (`LEI_DB_PATH`).** The SQLite store must live on a
-  writable filesystem. Set `LEI_DB_PATH` to the file path for the store -
-  on a container platform, a mounted, ideally persistent volume. If unset,
-  it defaults to a `lei-lookup/` folder under the system temp directory,
-  which keeps the app running but loses history on restart. It is never
-  written into the read-only application directory.
-- **OpenFIGI (optional).** The ISIN fallback works without a key. Set the
-  `OPENFIGI_API_KEY` environment variable to use a higher rate limit; it
-  is read from the environment and never hardcoded.
-- **Upload cap.** Bulk uploads are limited to 5 MB and 100 entities.
+- **`DATABASE_URL`** (or `POSTGRES_URL`): Postgres connection string
+  for the search store. Set automatically on Vercel by the Neon
+  integration. Unset locally means SQLite.
+- **`LEI_DB_PATH`**: path of the local SQLite file (SQLite mode only).
+- **`OPENFIGI_API_KEY`** (optional): raises the OpenFIGI rate limit for
+  the ISIN fallback. Read from the environment, never hardcoded.
+- **Upload cap**: 4 MB per file (Vercel's request body limit is
+  4.5 MB) and 100 entities.
 
 ## Data and privacy
 
-Each search is stored for 30 days in the single `searches` table of the
-SQLite store (its query and results), then pruned. The store lives at
-`LEI_DB_PATH` (see Configuration), defaulting to the system temp
-directory. On a container platform, point `LEI_DB_PATH` at a mounted
-persistent volume if the history needs to survive redeploys. The app sets
-no cookies.
+Each search is stored for 30 days in the single `searches` table (its
+query and results), then pruned on the next write. The app sets no
+cookies.
 
-## Deployment (CodeNow)
+## Deployment (Vercel)
 
-The repository follows the CodeNow Python pip-app layout (see
-`.codenow.yaml`): the release/preview pipelines build and run the service,
-exposing it on the configured port. `GET /health` is the probe endpoint
-(excluded from mirrord traffic stealing). The lookup pipeline is
-synchronous and network-bound (blocking GLEIF calls), and progress is a
-streamed NDJSON response, so disable response buffering on any proxy in
-front so events reach the browser as they happen.
+Vercel detects the Flask app from `app.py` (zero configuration) and
+runs it as one Python function; `vercel.json` sets the function's
+`maxDuration` to 300 s and keeps tests and the virtual environment out
+of the bundle. Static files are served from `public/` by the CDN.
 
-The image filesystem is read-only, so the SQLite store must not be written
-into the application directory (doing so crashes startup with
-`unable to open database file`). Set `LEI_DB_PATH` to a writable path -
-a mounted persistent volume to keep the 30-day history across redeploys, or
-leave it unset to use the ephemeral system temp directory.
+```bash
+vercel link              # once, picks/creates the Vercel project
+vercel deploy            # preview deployment
+vercel deploy --prod     # production
+```
+
+The search store is a Neon Postgres database added to the project from
+the Vercel Marketplace (Storage tab); its integration injects
+`DATABASE_URL` into the deployment. The table is created on first use.
