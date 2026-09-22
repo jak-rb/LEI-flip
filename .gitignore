@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Logs
+*.log
+
+# SQLite store (runtime per-search results; created on first run)
+src/data/lei_lookup.db
+
+# Supports
+docs/

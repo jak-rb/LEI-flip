@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Admin - all searches</title>
+        <style>
+            body { font-family: system-ui, sans-serif; margin: 1rem; }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                font-size: 0.8rem;
+            }
+            th, td {
+                border: 1px solid #cbd5e1;
+                padding: 0.4rem 0.6rem;
+                text-align: left;
+                vertical-align: top;
+                word-break: break-word;
+            }
+            th { background: #f1f5f9; position: sticky; top: 0; }
+            td { max-width: 40rem; }
+            /* The big JSON columns collapse by default so many records
+               stay visible; click one to read its full contents. */
+            .json-cell summary {
+                cursor: pointer;
+                color: #2563eb;
+                user-select: none;
+            }
+            .json-cell pre {
+                white-space: pre-wrap;
+                word-break: break-word;
+                margin: 0.4rem 0 0;
+                font-size: 0.75rem;
+            }
+        </style>
+    </head>
+    <body>
+        <table>
+            <thead>
+                <tr>
+                    {% for col in columns %}<th>{{ col }}</th>{% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    {% for col in columns %}
+                        {% if col in ['results', 'query'] %}
+                        <td class="json-cell">
+                            <details>
+                                <summary>{{ col }}</summary>
+                                <pre>{{ row[col] }}</pre>
+                            </details>
+                        </td>
+                        {% else %}
+                        <td>{{ row[col] }}</td>
+                        {% endif %}
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </body>
+</html>
