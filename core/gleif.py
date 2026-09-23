@@ -63,7 +63,7 @@ class GleifServerError(GleifApiError):
 
 
 class GleifQueryError(GleifApiError):
-    """GLEIF refused the query itself (an HTTP 4xx other than 429).
+    """GLEIF refused the query itself (a 4xx but 401, 403, 407, 429).
 
     Asking again cannot help: the problem is this query, not the
     service.
@@ -246,10 +246,12 @@ class GleifClient:
         Retries transport errors and server errors (HTTP 5xx, or a body
         that is not a JSON object) after a doubling backoff, and a rate
         limit (HTTP 429) after the wait its Retry-After asks for. Any
-        other 4xx is not retried. Every GLEIF failure is raised as a
-        GleifApiError or one of its subclasses, so callers have a single
-        exception type to catch. No attempt or retry starts after the
-        deadline, and each attempt's timeout is cut to the time left.
+        other 4xx is not retried, and one refusing access (401, 403,
+        407) counts as GLEIF being unavailable. Every GLEIF failure is
+        raised as a GleifApiError or one of its subclasses, so callers
+        have a single exception type to catch. No attempt or retry
+        starts after the deadline, and each attempt's timeout is cut to
+        the time left.
 
         Args:
             path: API path appended to the GLEIF base URL.
@@ -259,12 +261,14 @@ class GleifClient:
             The parsed JSON response body.
 
         Raises:
-            GleifQueryError: If GLEIF refuses the query (a 4xx but 429).
+            GleifQueryError: If GLEIF refuses the query (a 4xx but
+                401, 403, 407 or 429).
             GleifServerError: If GLEIF keeps answering with a server
                 error or a body that is not a JSON object.
             GleifRateLimited: If GLEIF keeps rate-limiting, or the wait
                 it asks for does not fit before the deadline.
-            GleifApiError: If GLEIF stays unreachable.
+            GleifApiError: If GLEIF stays unreachable or denies access
+                (HTTP 401, 403 or 407).
             DeadlineExceeded: If the deadline comes first.
         """
         url = GLEIF_BASE_URL + path
@@ -310,6 +314,15 @@ class GleifClient:
                 backoff *= 2
                 continue
 
+            if status in (401, 403, 407):
+                # Access itself is refused (credentials, a block, a
+                # proxy): every query would meet the same, so GLEIF
+                # counts as unavailable and the job waits instead of
+                # failing this entity. Asking again at once cannot
+                # help either.
+                raise GleifApiError(
+                    f"GLEIF API denied access: HTTP {status}"
+                )
             if 400 <= status < 500:
                 raise GleifQueryError(
                     f"GLEIF API refused the query: HTTP {status}"

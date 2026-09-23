@@ -100,8 +100,11 @@ def _no_match(notes: str) -> LookupResult:
 
 def _isin_country(isin: Optional[str]) -> Optional[str]:
     """The ISO country code an ISIN starts with, if one is present."""
-    if isin and len(isin) >= 2:
-        return isin[:2].upper()
+    # Anything but two letters (a stray space, digits) would only reach
+    # GLEIF as a country filter nobody can match.
+    prefix = normalize_isin(isin)[:2]
+    if len(prefix) == 2 and prefix.isascii() and prefix.isalpha():
+        return prefix
     return None
 
 
