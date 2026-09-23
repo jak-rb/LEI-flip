@@ -186,8 +186,11 @@ def _read_xlsx(content: bytes) -> list[_Row]:
         if _holds_semicolon_lines(sheet):
             rows = _entity_rows(_split_semicolon_lines(sheet))
         else:
+            decoded: dict[str, str] = {}
             rows = _entity_rows(
-                (number, [cell.strip() for cell in cells])
+                (number, [
+                    _decode_escapes(cell, decoded).strip() for cell in cells
+                ])
                 for number, cells in _filled_rows(
                     sheet, len(_COLUMNS), _COLUMNS.index("zip_code")
                 )
@@ -300,7 +303,8 @@ def _filled_rows(
 ) -> Iterator[tuple[int, list[str]]]:
     """Yield (worksheet row number, cells as text) of non-blank rows.
 
-    Reads the first ``width`` columns of every row (see _cell_text).
+    Reads the first ``width`` columns of every row, text as it is
+    saved: its escapes are left to the caller (see _decode_escapes).
     Given a ``zip_index``, the cell there is a postal code, and a number
     in it keeps the zeros its format shows (see _postal_code_text).
     That takes openpyxl's cell objects, which cost more than bare
@@ -316,7 +320,7 @@ def _filled_rows(
         # far-away cell makes openpyxl yield a million empty rows.
         if values.count(None) == len(values):
             continue
-        cells = [_cell_text(value) for value in values]
+        cells = ["" if cell is None else str(cell) for cell in values]
         if with_cells:
             cells[zip_index] = _postal_code_text(
                 row[zip_index], cells[zip_index]
@@ -325,18 +329,24 @@ def _filled_rows(
             yield number, cells
 
 
-def _cell_text(value) -> str:
-    """A cell value as text, with Excel's _xHHHH_ escapes decoded.
+def _decode_escapes(text: str, decoded: dict[str, str]) -> str:
+    """Text read from an .xlsx, with Excel's _xHHHH_ escapes decoded.
 
     Excel saves a character XML cannot hold, such as the carriage
     return of a line break typed in a cell, as "_x000D_" (and a real
-    "_x" as "_x005F_x"); openpyxl leaves them as they are.
+    "_x" as "_x005F_x"); openpyxl leaves them as they are. An escaped
+    UTF-16 pair of surrogates becomes its one character, and a lone
+    surrogate, which is no character, becomes U+FFFD. One shared
+    string can fill any number of cells, so each text is decoded once
+    and kept in ``decoded``.
     """
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return unescape(value)
-    return str(value)
+    if "_x" not in text:
+        return text
+    if text not in decoded:
+        decoded[text] = unescape(text).encode(
+            "utf-16", "surrogatepass"
+        ).decode("utf-16", "replace")
+    return decoded[text]
 
 
 def _postal_code_text(cell, text: str) -> str:
@@ -389,16 +399,21 @@ def _holds_semicolon_lines(sheet) -> bool:
 
 def _split_semicolon_lines(sheet) -> Iterator[_Row]:
     """Rebuild each row's original line and split it at semicolons."""
+    decoded: dict[str, str] = {}
     for number, cells in _filled_rows(sheet, _LINE_COLUMNS):
         while not cells[-1].strip():
             cells.pop()
         # Excel split the line at its commas, so joining the cells with
         # commas restores it (a cell keeps its leading space). Each line
         # is parsed on its own: an unbalanced quote must not swallow
-        # the rows after it.
+        # the rows after it. Escapes are decoded only in the fields: a
+        # line break decoded before would stand outside any quotes,
+        # which the csv module refuses.
         line = ",".join(cells)
         fields = next(csv.reader([line], delimiter=";"), [])
-        yield number, [field.strip() for field in fields]
+        yield number, [
+            _decode_escapes(field, decoded).strip() for field in fields
+        ]
 
 
 def _decode(content: bytes) -> str:
@@ -495,14 +510,18 @@ def _entity_rows(rows: Iterable[_Row]) -> list[_Row]:
     """
     kept = []
     header_checked = False
+    # Whether each name or ISIN text is blank: one .xlsx shared string
+    # can fill any number of cells, and such a row is not counted.
+    blank: dict[str, bool] = {}
     for number, cells in rows:
         cells = cells[:len(_COLUMNS)]
         # A name or ISIN with no visible character, such as a lone
         # zero-width space, is as empty as it looks.
-        if any(cells[:2]):
-            cells[:2] = [
-                "" if is_blank(cell) else cell for cell in cells[:2]
-            ]
+        for index, cell in enumerate(cells[:2]):
+            if cell not in blank:
+                blank[cell] = is_blank(cell)
+            if blank[cell]:
+                cells[index] = ""
         if not any(cells):
             continue
         if not header_checked:

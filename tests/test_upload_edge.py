@@ -9,6 +9,7 @@ so nothing reaches GLEIF.
 """
 
 import io
+import time
 import zipfile
 
 import pytest
@@ -173,6 +174,42 @@ def test_a_decoded_control_character_still_downloads(client):
     sheet = load_workbook(io.BytesIO(excel.data)).active
     names = [row[0] for row in sheet.iter_rows(values_only=True)]
     assert "BadName a.s." in names
+
+
+def test_a_semicolon_line_with_an_escaped_line_break_is_read():
+    # Decoded before the line is split, the carriage return or line
+    # feed would stand outside quotes, which the csv module refuses.
+    content = _xlsx([
+        ["Name;ISIN;Country"],
+        ["Firma_x000D_a.s.;CZ0005112300;CZ"],
+        ["Beta_x000A_s.r.o.;CZ0008019106_x000D_;CZ"],
+        ['"Gama_x000D_\na.s.";CZ0005112300;CZ'],
+    ])
+    assert _entities(content, "in.xlsx") == [
+        ("Firma\ra.s.", "CZ0005112300"),
+        ("Beta\ns.r.o.", "CZ0008019106"),
+        ("Gama\r\na.s.", "CZ0005112300"),
+    ]
+
+
+@pytest.mark.parametrize(("saved", "read"), [
+    # An emoji saved as its two UTF-16 halves, and lone halves, which
+    # are no character at all.
+    ("Smile _xD83D__xDE00_ s.r.o.", "Smile \U0001f600 s.r.o."),
+    ("Alfa_xD800_ a.s.", "Alfa\ufffd a.s."),
+    ("Alfa_xDFFF_", "Alfa\ufffd"),
+])
+def test_escaped_surrogates_are_read_as_text(saved, read):
+    assert _names(_xlsx([[saved, None, "CZ"]]), "in.xlsx") == [read]
+    lines = _xlsx([["Name;ISIN;Country"], [f"{saved};;CZ"]])
+    assert _names(lines, "in.xlsx") == [read]
+
+
+def test_an_escaped_lone_surrogate_creates_a_job(client):
+    content = _xlsx([["Alfa_xD800_ a.s.", None, "CZ"]])
+    created = _create_bulk(client, content, "in.xlsx")
+    assert created.status_code == 200, created.data[:200]
+    assert _stored_query(created)[0]["name"] == "Alfa\ufffd a.s."
 
 
 # Postal codes saved as zero-padded numbers (report #21).
@@ -371,6 +408,60 @@ def test_the_single_form_refuses_an_invisible_only_name(client):
     })
     assert created.status_code == 200, created.get_json()
     assert _stored_query(created)[0]["name"] is None
+
+
+# One shared string in many cells.
+
+def _shared_string_rows(first, text, count):
+    """An .xlsx of a row ``first``, then ``count`` rows of ``text``.
+
+    Both are shared strings, 0 and 1, as Excel saves text, and every
+    row after the first names string 1: one text in thousands of cells.
+    (openpyxl itself saves inline strings.)
+    """
+    strings = (
+        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/'
+        f'2006/main"><si><t>{first}</t></si><si><t>{text}</t></si></sst>'
+    ).encode()
+    override = (
+        b'<Override PartName="/xl/sharedStrings.xml" ContentType="'
+        b'application/vnd.openxmlformats-officedocument.spreadsheetml.'
+        b'sharedStrings+xml" /></Types>'
+    )
+    rows = "".join(
+        f'<row r="{number}"><c r="A{number}" t="s"><v>1</v></c></row>'
+        for number in range(2, count + 2)
+    )
+    sheet = (
+        '<worksheet xmlns="http://schemas.openxmlformats.org/'
+        'spreadsheetml/2006/main"><sheetData>'
+        '<row r="1"><c r="A1" t="s"><v>0</v></c></row>'
+        f"{rows}</sheetData></worksheet>"
+    ).encode()
+    source = zipfile.ZipFile(io.BytesIO(_with_sheet(_xlsx([["x"]]), sheet)))
+    result = io.BytesIO()
+    with zipfile.ZipFile(result, "w", zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename == "[Content_Types].xml":
+                data = data.replace(b"</Types>", override)
+            target.writestr(item.filename, data)
+        target.writestr("xl/sharedStrings.xml", strings)
+    return result.getvalue()
+
+
+@pytest.mark.parametrize(("first", "text"), [
+    ("Tiny company", "_x0020_" * 4681),
+    ("Tiny company", "\u200b" * 32767),
+    ("Tiny company;", ";" + "_x0020_" * 4680),
+], ids=["escaped spaces", "zero-width spaces", "semicolon line"])
+def test_one_long_shared_string_in_many_cells_is_read_quickly(first, text):
+    # Blank once decoded or checked, these rows are no entities and
+    # never reach the entity cap: each must cost next to nothing.
+    content = _shared_string_rows(first, text, 3000)
+    started = time.perf_counter()
+    assert _names(content, "in.xlsx") == ["Tiny company"]
+    assert time.perf_counter() - started < 5
 
 
 # Files named just ".csv" (report #29).
