@@ -10,6 +10,7 @@ import io
 
 import pytest
 from openpyxl import Workbook
+from openpyxl.chart import BarChart, Reference
 
 import app as app_module
 from core import storage
@@ -61,10 +62,10 @@ def _create_single(client, **fields):
     return client.post("/api/jobs", data={"mode": "single", **fields})
 
 
-def _create_bulk(client, content):
+def _create_bulk(client, content, filename="in.csv"):
     return client.post(
         "/api/jobs",
-        data={"mode": "bulk", "file_upload": (io.BytesIO(content), "in.csv")},
+        data={"mode": "bulk", "file_upload": (io.BytesIO(content), filename)},
         content_type="multipart/form-data",
     )
 
@@ -228,6 +229,25 @@ def test_bulk_reads_utf16_and_cr_files_and_refuses_unreadable(client):
         body = refused.get_json()
         assert "Could not read the .csv file" in body["error"]
         assert "Soubor .csv se nepodařilo přečíst" in body["error_cs"]
+
+
+def test_bulk_xlsx_saved_on_a_chart_sheet_reads_its_worksheet(client):
+    # Excel saves the sheet on screen as the active one; a chart sheet
+    # has no cells and used to crash the upload with a 500.
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["Name", "ISIN", "Country"])
+    sheet.append(["Match AG", None, "DE"])
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=2))
+    workbook.create_chartsheet("Chart").add_chart(chart)
+    workbook.active = 1
+    content = io.BytesIO()
+    workbook.save(content)
+
+    created = _create_bulk(client, content.getvalue(), "in.xlsx")
+    assert created.status_code == 200, created.get_json()
+    assert created.get_json()["total"] == 1
 
 
 def test_gleif_outage_keeps_progress_and_resumes(client, monkeypatch):

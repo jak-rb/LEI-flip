@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.chartsheet import Chartsheet
 from pydantic import ValidationError
 
 from .models import InputEntity, InputError
@@ -90,7 +91,7 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
 
 
 def _read_xlsx(content: bytes) -> list[list[str]]:
-    """Read the first worksheet into rows of trimmed string cells."""
+    """Read the active worksheet into rows of trimmed string cells."""
     try:
         workbook = load_workbook(
             io.BytesIO(content), read_only=True, data_only=True
@@ -104,6 +105,10 @@ def _read_xlsx(content: bytes) -> list[list[str]]:
         ) from error
 
     sheet = workbook.active
+    # Excel saves the sheet on screen as the active one; a chart sheet
+    # has no cells, so fall back to the first worksheet.
+    if isinstance(sheet, Chartsheet):
+        sheet = workbook.worksheets[0]
     rows = []
     for raw in sheet.iter_rows(values_only=True):
         rows.append(
