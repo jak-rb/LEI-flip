@@ -8,7 +8,7 @@ from core import storage
 
 def _job(query=None):
     """Create a fresh search and return its id."""
-    job_id = secrets.token_hex(8)
+    job_id = secrets.token_hex(16)
     storage.create_search(
         job_id=job_id, mode="bulk",
         query=query or [{"name": "A"}, {"name": "B"}],
@@ -64,7 +64,8 @@ def test_get_unknown_job_returns_none():
 
 
 def test_record_decision_confirm_none_and_invalid():
-    job_id = _job()
+    # One entity, so the job is finished once its row is stored.
+    job_id = _job(query=[{"name": "x"}])
     storage.append_results(job_id, [_row(closest=("C1", "C2"))], 0)
 
     assert storage.record_decision(job_id, 0, "C2") == {

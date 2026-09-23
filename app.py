@@ -453,12 +453,32 @@ def decision():
     Expects a JSON body ``{"job_id", "index", "choice"}`` where choice
     is a candidate's LEI to confirm or "none" for no match. Flags the
     choice on the stored search so the detail page and downloads reflect
-    it. Returns the saved decision, or 404 if the search, the index, or
-    the candidate LEI is unknown.
+    it. Returns the saved decision; 400 with ``{"error", "error_cs"}``
+    if the body is not such an object (a string job id and choice, an
+    integer index); or 404 if the search is unknown or still running,
+    or the index or the candidate LEI is not one the page offers for
+    validation.
     """
-    data = request.get_json(silent=True) or {}
+    try:
+        data = request.get_json(silent=True)
+    except RecursionError:
+        # JSON nested thousands deep overflows the parser instead of
+        # failing as invalid JSON (which silent=True turns into None).
+        data = None
+    # type() rather than isinstance(): a JSON true or false arrives as
+    # a bool, which Python counts as an int.
+    if not (
+        isinstance(data, dict)
+        and isinstance(data.get("job_id"), str)
+        and type(data.get("index")) is int
+        and isinstance(data.get("choice"), str)
+    ):
+        return {
+            "error": "Invalid decision request.",
+            "error_cs": "Neplatný požadavek na rozhodnutí.",
+        }, 400
     saved = storage.record_decision(
-        data.get("job_id", ""), data.get("index"), data.get("choice"),
+        data["job_id"], data["index"], data["choice"],
     )
     if saved is None:
         return {"error": "not found"}, 404
