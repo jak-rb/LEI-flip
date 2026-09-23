@@ -112,10 +112,10 @@ def _read_xlsx(content: bytes) -> list[list[str]]:
             sheet = workbook.worksheets[0]
         rows = []
         for raw in sheet.iter_rows(values_only=True):
-            rows.append(
-                ["" if cell is None else str(cell).strip() for cell in raw]
-            )
+            rows.append(["" if cell is None else str(cell) for cell in raw])
         workbook.close()
+        if _holds_semicolon_lines(rows):
+            return _split_semicolon_lines(rows)
     except Exception as error:
         logger.warning("Failed to parse uploaded .xlsx file: %s", error)
         raise InputError(
@@ -123,7 +123,37 @@ def _read_xlsx(content: bytes) -> list[list[str]]:
             "Soubor .xlsx se nepodařilo přečíst. Je to platný soubor "
             "Excelu?",
         ) from error
-    return rows
+    return [[cell.strip() for cell in row] for row in rows]
+
+
+def _holds_semicolon_lines(rows: list[list[str]]) -> bool:
+    """Whether every non-empty row keeps a semicolon line in column A.
+
+    That is what Excel shows for a semicolon CSV opened with the comma
+    as the delimiter: each whole line lands in column A, split again
+    into the next columns wherever a value holds a comma.
+    """
+    filled = [row for row in rows if any(cell.strip() for cell in row)]
+    return bool(filled) and all(";" in row[0] for row in filled)
+
+
+def _split_semicolon_lines(rows: list[list[str]]) -> list[list[str]]:
+    """Rebuild each row's original line and split it at semicolons."""
+    result = []
+    for row in rows:
+        cells = list(row)
+        while cells and not cells[-1].strip():
+            cells.pop()
+        if not cells:
+            continue
+        # Excel split the line at its commas, so joining the cells with
+        # commas restores it (a cell keeps its leading space). Each line
+        # is parsed on its own: an unbalanced quote must not swallow
+        # the rows after it.
+        line = ",".join(cells)
+        fields = next(csv.reader([line], delimiter=";"), [])
+        result.append([field.strip() for field in fields])
+    return result
 
 
 def _decode(content: bytes) -> str:
@@ -167,12 +197,16 @@ def _read_csv(content: bytes, delimiter: str | None) -> list[list[str]]:
 
 
 def _drop_header(rows: list[list[str]]) -> list[list[str]]:
-    """Drop the first row when it looks like a header."""
+    """Drop the first row when it looks like a header.
+
+    Besides the usual labels, a second cell naming the ISIN column in
+    database style (such as ISIN_IDENT) marks a header.
+    """
     if not rows or not rows[0]:
         return rows
     first = rows[0][0].strip().lower()
     second = rows[0][1].strip().lower() if len(rows[0]) > 1 else ""
-    if first in _HEADER_CELLS or second == "isin":
+    if first in _HEADER_CELLS or "isin" in second:
         return rows[1:]
     return rows
 

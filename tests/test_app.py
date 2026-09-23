@@ -8,6 +8,7 @@ anything else -> no match.
 
 import io
 import zipfile
+from pathlib import Path
 
 import pytest
 from openpyxl import Workbook
@@ -282,6 +283,39 @@ def test_bulk_xlsx_saved_on_a_chart_sheet_reads_its_worksheet(client):
     created = _create_bulk(client, content.getvalue(), "in.xlsx")
     assert created.status_code == 200, created.get_json()
     assert created.get_json()["total"] == 1
+
+
+def test_bulk_xlsx_of_semicolon_lines_in_column_a(client):
+    # The user's file: a semicolon CSV opened in Excel with the comma as
+    # the delimiter, so each line sits in column A and is split again
+    # into column B at the comma in the street. Only 2 garbage entities
+    # used to be read from it.
+    fixture = Path(__file__).parent / "fixtures" / "test_lei.xlsx"
+    created = _create_bulk(client, fixture.read_bytes(), "test_lei.xlsx")
+    assert created.status_code == 200, created.get_json()
+    query = storage.get_search(created.get_json()["job_id"])["query"]
+    assert [(entity["name"], entity["isin"]) for entity in query] == [
+        ("CBRE Investment Management Listed Real Assets LLC",
+         "US12504G1004"),
+        ("Real REMAX Group Inc", "US7761051082"),
+        ("Abacus Global Management Inc", "US00258Y1047"),
+        ("Longeveron Inc", "US54303L3024"),
+        ("Nomura Holdings INC", "JP3046680009"),
+        ("Nomura Holdings INC", "JP3046710004"),
+        ("FIRY INC", "US83067L2088"),
+    ]
+    assert query[0] == {
+        "name": "CBRE Investment Management Listed Real Assets LLC",
+        "isin": "US12504G1004",
+        "country": "US",
+        "city": "Randor",
+        "street": "201 King of Prussia Road, Suite 600",
+        "postal_code": "PA 19087",
+    }
+    # FIRY's source line is itself malformed: its ZIP ended up inside
+    # the quoted street.
+    assert query[-1]["street"] == "1061 Market St,;CA 94103"
+    assert query[-1]["postal_code"] is None
 
 
 def test_bulk_refuses_damaged_or_chart_only_xlsx(client):

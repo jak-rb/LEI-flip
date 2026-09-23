@@ -200,7 +200,10 @@ single streaming request that looked up a whole bulk file is gone. Instead:
 1. `POST /api/jobs` validates the input (single form fields, or an uploaded
    `.xlsx`/`.csv`/`.tsv`/`.txt` parsed by `core/upload.py` - positional
    columns, 100-entity cap; a `.csv` detects comma, semicolon or tab, a
-   `.tsv`/`.txt` is always tab-separated) and stores the entities to look up under a new `job_id` via
+   `.tsv`/`.txt` is always tab-separated; an `.xlsx` whose rows are whole
+   semicolon lines in column A - a semicolon CSV Excel opened with the
+   wrong delimiter - is rebuilt and split at the semicolons) and stores
+   the entities to look up under a new `job_id` via
    `core/storage.create_search`. Nothing is looked up yet. Unusable input
    returns 400 with an `error` message the search page shows next to its
    Search button (this replaced the separate pre-flight endpoint).
