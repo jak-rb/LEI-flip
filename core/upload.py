@@ -69,8 +69,8 @@ _HEADER_WORDS = frozenset({
     "name", "entity", "company", "legal", "full", "party", "issuer",
     "firm", "firma", "firmy", "nazev", "subjekt", "subjektu",
     "obchodni", "jmeno", "emitent", "emitenta", "spolecnost",
-    "spolecnosti", "counterparty", "protistrana", "client", "klient",
-    "customer",
+    "spolecnosti", "counterparty", "protistrana", "protistrany",
+    "client", "klient", "klienta", "customer",
     # ISIN
     "isin", "code", "kod", "ident", "identifier",
     # Address
@@ -85,6 +85,9 @@ _LABEL_NOTE = re.compile(r"\([^)]*\)")
 
 #: An ISIN anywhere in a cell, once its spaces are removed.
 _ISIN_SHAPE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
+
+#: The longest ISIN cell InputEntity accepts.
+_ISIN_MAX_LENGTH = 20
 
 #: Columns read from an .xlsx row whose column A holds a semicolon
 #: line: Excel split the line again at every comma, so rebuilding it
@@ -389,13 +392,18 @@ def _holds_semicolon_lines(sheet) -> bool:
     as the delimiter: each whole line lands in column A, split again
     into the next columns wherever a value holds a comma, even one in
     the name ("ČEZ, a. s."). So each row's line is rebuilt first (see
-    _line_fields). Every line must hold a semicolon, and on more than
-    half of them the second field must be empty, an ISIN or a label,
-    as the documented layout has it: a plain sheet whose names hold a
-    semicolon ("Apple; Inc" beside its ISIN) is read as columns. At
-    most a header and MAX_ENTITIES + 1 rows are checked: read as
-    columns, that many rows would be too many entities anyway, so the
-    lines are the one reading left to try.
+    _line_fields). Every line must hold a semicolon, and more than
+    half of them must follow the documented layout: nothing but a
+    name before the first semicolon, and a second field that is empty,
+    an ISIN or a label, or, in a line of three fields or more, a short
+    value such as "-" or "N/A", with no comma in it or in the third
+    field. A plain sheet with a semicolon in each row is read as
+    columns: one in a name ("Apple; Inc" beside its ISIN) leaves the
+    rest of the row, commas and all, in the last field, and one
+    further on leaves the ISIN or a blank cell before the first
+    semicolon. At most a header and MAX_ENTITIES + 1 rows are
+    checked: read as columns, that many rows would be too many
+    entities anyway, so the lines are the one reading left to try.
     """
     checked = laid_out = 0
     decoded: dict[str, str] = {}
@@ -403,14 +411,25 @@ def _holds_semicolon_lines(sheet) -> bool:
         # Joining the cells with commas adds no semicolon.
         if not any(";" in cell for cell in cells):
             return False
-        fields = _line_fields(cells)
         # Decoded, and empty when invisible, as the entity rows see it.
-        second = (
-            _decode_escapes(fields[1], decoded) if len(fields) > 1 else ""
+        fields = [
+            _decode_escapes(field, decoded) for field in _line_fields(cells)
+        ]
+        # Before the first semicolon, only a name can have been split
+        # at its commas, into pieces that are neither blank nor an ISIN.
+        pieces = fields[0].split(",")
+        plain = len(pieces) > 1 and any(
+            is_blank(piece) or is_valid_isin(normalize_isin(piece))
+            for piece in pieces
         )
-        if (
+        second = fields[1] if len(fields) > 1 else ""
+        if not plain and (
             is_blank(second) or _is_label(second) or _is_isin_label(second)
             or _ISIN_SHAPE.fullmatch(normalize_isin(second))
+            or (
+                len(fields) > 2 and "," not in second + fields[2]
+                and len(second.strip()) <= _ISIN_MAX_LENGTH
+            )
         ):
             laid_out += 1
         checked += 1
@@ -576,14 +595,14 @@ def _non_blank_rows(rows: Iterable[_Row]) -> Iterator[_Row]:
 def _after_header(rows: Iterator[_Row]) -> Iterator[_Row]:
     """The non-blank rows, less a first row that is a header.
 
-    A first row of one filled cell may be a title ("Seznam subjektů")
-    above the header: it is skipped with the next row when that is a
-    header of two labels or more. Otherwise the first row is data, so
+    A first row of one filled cell may be a title ("Seznam subjektů",
+    or "Firmy", itself a label) above the header: it is skipped with
+    the next row when that is a header of two labels or more.
+    Otherwise such a row is data unless it is a header of its own, so
     a list of names keeps its first name whatever the second is.
     """
     first = next(rows, None)
-    if first is None or _is_header(first[1]):
-        yield from rows
+    if first is None:
         return
     second = None
     if sum(1 for cell in first[1] if cell) == 1:
@@ -594,7 +613,8 @@ def _after_header(rows: Iterator[_Row]) -> Iterator[_Row]:
         ):
             yield from rows
             return
-    yield first
+    if not _is_header(first[1]):
+        yield first
     if second is not None:
         yield second
     yield from rows
@@ -604,22 +624,30 @@ def _is_header(cells: list[str]) -> bool:
     """Whether a row holds column labels rather than an entity.
 
     A company may be named like labels ("Party City", "Client
-    Company"), so a row whose ISIN is valid, or with a cell that looks
-    like data (see _looks_like_data), is never a header. Otherwise the
-    name and the ISIN cells must each be empty or a label, one of them
-    a label, or most filled cells must be labels: a city or a street
-    may be named like a label (Clarks is in Street, Somerset), so the
-    address cells only count together.
+    Company"), so a row whose ISIN is valid, or with at least as many
+    cells that look like data (see _looks_like_data) as labels, is
+    never a header; a header may still name a column or two in a way
+    that looks like data ("Address 1", "CC"). Otherwise it is one when
+    its ISIN cell is a bare label ("ISIN", "Kód ISIN"), whatever its
+    name label says ("Název klienta"); when its name and ISIN cells
+    are each empty or a label, one of them a label (not
+    "Raiffeisenbank a.s." beside "ISIN not available"); or when most
+    filled cells are labels: a city or a street may be named like a
+    label (Clarks is in Street, Somerset), so the address cells only
+    count together.
     """
     isin = cells[1] if len(cells) > 1 else ""
     if is_valid_isin(normalize_isin(isin)):
         return False
     labels = _labels(cells)
-    if any(
-        cell and not label and _looks_like_data(cell)
-        for cell, label in zip(cells, labels)
-    ):
+    data = sum(
+        1 for cell, label in zip(cells, labels)
+        if cell and not label and _looks_like_data(cell)
+    )
+    if data >= sum(labels):
         return False
+    if _is_label(isin):
+        return True
     if any(labels[:2]) and all(
         label or not cell for cell, label in zip(cells[:2], labels[:2])
     ):

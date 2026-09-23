@@ -1,11 +1,13 @@
 
 """Tests of the upload fixes from the 2026-09-23 verification round.
 
-An .xlsx of semicolon lines whose names hold a comma, a plain .xlsx
-whose names hold a semicolon, first data rows named like labels, a
-title row above the header, and cp1250 text with a byte cp1250 leaves
-undefined. Most tests call parse_upload directly; the route test fakes
-the lookup as tests/test_app.py does, so nothing reaches GLEIF.
+An .xlsx of semicolon lines whose names hold a comma or whose ISIN
+fields hold a placeholder, a plain .xlsx whose cells hold a semicolon,
+first data rows named like labels, headers with a label outside the
+word list or one that looks like data, a title row above the header,
+and cp1250 text with a byte cp1250 leaves undefined. Most tests call
+parse_upload directly; the route tests fake the lookup as
+tests/test_app.py does, so nothing reaches GLEIF.
 """
 
 import csv
@@ -17,7 +19,7 @@ from openpyxl import Workbook
 import app as app_module
 from core import storage
 from core.models import InputError, LookupResult
-from core.upload import parse_upload
+from core.upload import MAX_ENTITIES, parse_upload
 
 GOOD_ROW = ["Alfa a.s.", "CZ0005112300", "CZ", "Praha", "Ulice 1", "110 00"]
 LONG_ISIN = "CZ0005112300 (kmenova akcie)"
@@ -182,6 +184,33 @@ def test_lines_with_a_few_odd_isin_fields_are_still_lines():
     ]
 
 
+@pytest.mark.parametrize("lines, expected", [
+    (["Alfa a.s.;N/A;CZ", "Beta a.s.;N/A;CZ", "Gama a.s.;CZ0005112300;CZ"],
+     [("Alfa a.s.", "N/A", "CZ"), ("Beta a.s.", "N/A", "CZ"),
+      ("Gama a.s.", "CZ0005112300", "CZ")]),
+    (["Alfa a.s.;CZ0005112300 (akcie);CZ",
+      "Beta a.s.;CZ0008019106 (akcie);CZ"],
+     [("Alfa a.s.", "CZ0005112300 (akcie)", "CZ"),
+      ("Beta a.s.", "CZ0008019106 (akcie)", "CZ")]),
+    (["Název;ISIN;Země", "ČEZ, a. s.;-;CZ", "Komerční banka, a.s.;-;CZ",
+      "Moneta Money Bank a.s.;CZ0008040318;CZ"],
+     [("ČEZ, a. s.", "-", "CZ"), ("Komerční banka, a.s.", "-", "CZ"),
+      ("Moneta Money Bank a.s.", "CZ0008040318", "CZ")]),
+    (["Název;ISIN;Země", "ČEZ, a. s.;-;CZ"], [("ČEZ, a. s.", "-", "CZ")]),
+    (["Alfa a.s.;-;CZ;Praha;Ulice 1, patro 2;110 00",
+      "Beta a.s.;-;CZ;Brno;Ulice 2;602 00",
+      "Gama, a.s.;CZ0005112300;CZ;Brno;Ulice 3;602 00"],
+     [("Alfa a.s.", "-", "CZ"), ("Beta a.s.", "-", "CZ"),
+      ("Gama, a.s.", "CZ0005112300", "CZ")]),
+], ids=["n/a", "isin with a note", "comma names", "header and one row",
+        "six fields"])
+def test_lines_whose_isin_fields_hold_placeholders_are_lines(
+    lines, expected
+):
+    content = _opened_with_commas(lines)
+    assert [row[:3] for row in _fields(content)] == expected
+
+
 def test_comma_lines_keep_their_worksheet_row_numbers():
     content = _opened_with_commas([
         "Název;ISIN", "ČEZ, a. s.;CZ0005112300", "",
@@ -218,8 +247,10 @@ def test_the_route_stores_comma_names_from_semicolon_lines(client):
     [["Alpha; Beta Holdings", None, "GB"]],
     [["Alfa; Beta a.s."]],
     [["Foo; Bar s.r.o.", None, "CZ", "Praha", "Na Příkopě 28", "110 00"]],
+    [["Alpha; Beta; Gamma Holdings", None, "GB"],
+     ["Delta; Epsilon; Zeta Ltd", None, "GB"]],
 ], ids=["two rows", "one row with isin", "one row with country",
-        "one cell", "one full row"])
+        "one cell", "one full row", "two semicolons"])
 def test_names_holding_a_semicolon_keep_their_columns(rows):
     assert _fields(_xlsx(rows)) == [
         tuple(row[index] if index < len(row) else None for index in range(6))
@@ -232,6 +263,53 @@ def test_one_semicolon_line_is_still_read_as_a_line():
     assert [row[:3] for row in _fields(content)] == [
         ("Alfa a.s.", "CZ0005112300", "CZ"),
     ]
+
+
+@pytest.mark.parametrize("rows", [
+    [GOOD_ROW + ["CZ0005112300;CZ0008019106"],
+     ["Beta a.s.", "CZ0008040318", "CZ", "Brno", "Ulice 2", "602 00",
+      "CZ0008040318;CZ0009093209"]],
+    [GOOD_ROW[:4] + ["Ulice 1;"],
+     ["Beta a.s.", "CZ0008040318", "CZ", "Brno", "Ulice 2;"]],
+    [["Alfa a.s.", "", "CZ", "Praha", "Ulice 1;"],
+     ["Beta a.s.", "", "CZ", "Brno", "Ulice 2;"]],
+], ids=["isin list past the columns", "street ending in ;",
+        "no isin, street ending in ;"])
+def test_a_semicolon_past_column_a_keeps_the_columns(rows):
+    assert _fields(_xlsx(rows)) == [
+        tuple(row[index] or None if index < len(row) else None
+              for index in range(6))
+        for row in rows
+    ]
+
+
+def test_one_line_with_a_stray_comma_in_its_name_leaves_the_lines():
+    content = _opened_with_commas([
+        "Alfa a.s.,;CZ0005112300;CZ",
+        "Beta a.s.;CZ0008019106;CZ",
+        "ČEZ, a. s.;CZ0008040318;CZ",
+    ])
+    assert [row[:3] for row in _fields(content)] == [
+        ("Alfa a.s.,", "CZ0005112300", "CZ"),
+        ("Beta a.s.", "CZ0008019106", "CZ"),
+        ("ČEZ, a. s.", "CZ0008040318", "CZ"),
+    ]
+
+
+def test_two_isins_in_the_isin_column_are_refused_by_row():
+    content = _xlsx([
+        ["Alfa a.s.", "CZ0005112300; CZ0008019106"],
+        ["Beta a.s.", "CZ0008040318; CZ0009093209"],
+    ])
+    english, czech = _refusal(content, "in.xlsx")
+    assert english == (
+        "Row 1: the ISIN is longer than 20 characters. "
+        "Row 2: the ISIN is longer than 20 characters."
+    )
+    assert czech == (
+        "Řádek 1: ISIN je delší než 20 znaků. "
+        "Řádek 2: ISIN je delší než 20 znaků."
+    )
 
 
 # First data rows named like labels.
@@ -275,6 +353,73 @@ def test_country_words_in_a_header_are_labels_not_countries(header):
     assert _names(_xlsx(rows), "in.xlsx") == ["Alfa a.s."]
 
 
+# Headers with a label outside the word list, or one that looks like
+# data.
+
+OTHER_HEADERS = [
+    ["Název klienta", "ISIN"],
+    ["Název protistrany", "ISIN"],
+    ["Name of entity", "ISIN"],
+    ["Organization name", "ISIN"],
+    ["Company short name", "ISIN", "Country"],
+    ["Název klienta", "ISIN číslo"],
+    ["Název protistrany", "", "Země"],
+    ["Name", "ISIN", "Country", "City", "Address 1", "ZIP"],
+    ["PARTY_FULL_NAME", "ISIN_IDENT", "COUNTRY_CODE", "ADDR_CITY_NAME",
+     "ADDR_LINE_1", "ADDR_ZIP_CODE"],
+    ["Name", "ISIN", "Country ISO 3166", "City"],
+    ["NAME", "ISIN", "CC"],
+]
+
+
+@pytest.mark.parametrize("header", OTHER_HEADERS)
+def test_a_header_with_other_labels_is_skipped(header):
+    rows = [header, GOOD_ROW]
+    assert _names(_csv(rows)) == ["Alfa a.s."]
+    assert _names(_xlsx(rows), "in.xlsx") == ["Alfa a.s."]
+
+
+@pytest.mark.parametrize("header", [
+    OTHER_HEADERS[index] for index in (0, 1, 7, 8)
+])
+def test_a_full_file_under_a_header_with_other_labels_is_accepted(header):
+    rows = [header] + [
+        [f"Firma {index} a.s.", "", "CZ"] for index in range(MAX_ENTITIES)
+    ]
+    assert len(parse_upload("in.csv", _csv(rows))) == MAX_ENTITIES
+    assert len(parse_upload("in.xlsx", _xlsx(rows))) == MAX_ENTITIES
+
+
+def test_the_route_takes_a_full_file_under_a_client_name_header(client):
+    rows = [["Název klienta", "ISIN"]] + [
+        [f"Firma {index} a.s.", ""] for index in range(MAX_ENTITIES)
+    ]
+    content = "".join(";".join(row) + "\n" for row in rows).encode("cp1250")
+    created = client.post(
+        "/api/jobs",
+        data={
+            "mode": "bulk",
+            "file_upload": (io.BytesIO(content), "klienti.csv"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert created.status_code == 200, created.get_json()
+    query = storage.get_search(created.get_json()["job_id"])["query"]
+    assert len(query) == MAX_ENTITIES
+    assert query[0]["name"] == "Firma 0 a.s."
+
+
+@pytest.mark.parametrize("first_row", [
+    ["Alfa a.s.", "ISIN", "CZ", "Praha", "Ulice 1", "110 00"],
+    ["Raiffeisenbank a.s.", "ISIN (not available)", "CZ"],
+    ["Party City", "ISIN", "US", "Woodcliff Lake", "25 Green Pond Rd"],
+])
+def test_a_data_row_with_an_isin_label_is_kept(first_row):
+    rows = [first_row, GOOD_ROW]
+    assert _names(_csv(rows)) == [first_row[0], "Alfa a.s."]
+    assert _names(_xlsx(rows), "in.xlsx") == [first_row[0], "Alfa a.s."]
+
+
 # A title row above the header.
 
 @pytest.mark.parametrize("rows", [
@@ -283,11 +428,34 @@ def test_country_words_in_a_header_are_labels_not_countries(header):
     [["List of entities 2026"], [], ["Name", "ISIN", "Country"], [],
      GOOD_ROW],
     [["Seznam subjektů"], ["Název", "", "Země"], GOOD_ROW],
+    # A title made of label words is a header of one cell itself.
+    [["Firmy"], ["Název", "ISIN", "Země"], GOOD_ROW],
+    [["Company"], [], ["Name", "ISIN", "Country"], GOOD_ROW],
 ], ids=["title", "title with empty cells", "title and blank rows",
-        "header without isin label"])
+        "header without isin label", "label title", "label title and blank"])
 def test_a_title_row_and_the_header_below_it_are_skipped(rows):
     assert _names(_csv(rows)) == ["Alfa a.s."]
     assert _names(_xlsx(rows), "in.xlsx") == ["Alfa a.s."]
+
+
+def test_a_one_cell_header_keeps_a_one_cell_name_below_it():
+    rows = [["Company"], ["Party City"], ["Alfa a.s."]]
+    assert _names(_csv(rows)) == ["Party City", "Alfa a.s."]
+    assert _names(_xlsx(rows), "in.xlsx") == ["Party City", "Alfa a.s."]
+
+
+def test_help_says_a_title_row_above_the_header_is_skipped(client):
+    html = " ".join(client.get("/").get_data(as_text=True).split())
+    assert (
+        "A first row of column labels (such as Name, ISIN or Country) is "
+        "skipped, and so is a one-cell title row above it; otherwise the "
+        "first row is searched too."
+    ) in html
+    assert (
+        "První řádek s popisky sloupců (např. Název, ISIN nebo Země) se "
+        "přeskočí, stejně jako nadpis v jediné buňce nad ním; jinak se "
+        "hledá i první řádek."
+    ) in html
 
 
 def test_rows_under_a_title_and_header_keep_their_numbers():
