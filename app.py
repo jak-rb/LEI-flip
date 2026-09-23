@@ -39,6 +39,7 @@ from core.gleif import (
 )
 from core.lookup import lookup_entity
 from core.models import InputEntity, InputError, LookupResult
+from core.notes import czech_note
 from core.upload import parse_upload
 
 logging.basicConfig(
@@ -56,6 +57,9 @@ app = Flask(__name__, static_folder="public", static_url_path="")
 # many stored fields (a candidate's street, an ISIN-only input's
 # country) are legitimately null.
 app.jinja_env.finalize = lambda value: "" if value is None else value
+
+# The results page shows each lookup note in English and in Czech.
+app.jinja_env.filters["czech_note"] = czech_note
 
 # Reject any request body larger than this. Flask raises HTTP 413
 # before the route runs, so an oversized upload is refused without
@@ -435,7 +439,10 @@ def run_job(job_id: str):
     """
     search = storage.get_search(job_id)
     if search is None:
-        return {"error": "not found"}, 404
+        return {
+            "error": "Search not found.",
+            "error_cs": "Vyhledávání nebylo nalezeno.",
+        }, 404
 
     offset = len(search["results"])
     pending = search["query"][offset:]
@@ -641,11 +648,14 @@ def decision():
     Expects a JSON body ``{"job_id", "index", "choice"}`` where choice
     is a candidate's LEI to confirm or "none" for no match. Flags the
     choice on the stored search so the detail page and downloads reflect
-    it. Returns the saved decision; 400 with ``{"error", "error_cs"}``
-    if the body is not such an object (a string job id and choice, an
-    integer index); or 404 if the search is unknown or still running,
-    or the index or the candidate LEI is not one the page offers for
-    validation.
+    it. Returns the saved decision plus ``counts``, the summary card's
+    matched / need-validation / unmatched numbers after it (so the page
+    can update the card without a reload); 400 with
+    ``{"error", "error_cs"}`` if the body is not such an object (a
+    string job id and choice, an integer index); or 404, also with
+    ``error`` and ``error_cs``, if the search is unknown or still
+    running, or the index or the candidate LEI is not one the page
+    offers for validation.
     """
     try:
         data = request.get_json(silent=True)
@@ -669,8 +679,20 @@ def decision():
         data["job_id"], data["index"], data["choice"],
     )
     if saved is None:
-        return {"error": "not found"}, 404
-    return {"ok": True, "decision": saved}
+        return {
+            "error": "Search or record not found.",
+            "error_cs": "Vyhledávání nebo záznam nebyl nalezen.",
+        }, 404
+    reply = {"ok": True, "decision": saved}
+    search = storage.get_search(data["job_id"])
+    if search is not None:  # None only if it expired since the save
+        groups = _partition(search["results"])
+        reply["counts"] = {
+            "matched": groups["matched_count"],
+            "need_validation": groups["need_validation_count"],
+            "unmatched": groups["unmatched_count"],
+        }
+    return reply
 
 
 if __name__ == "__main__":

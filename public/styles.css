@@ -871,6 +871,13 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
 
 .validate-none.is-chosen { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
 
+/* While a decision is being saved, every decision button is disabled. */
+.candidate-confirm:disabled,
+.validate-none:disabled { opacity: 0.6; cursor: progress; box-shadow: none; }
+
+.validation-error { margin: 1rem 0 0; color: var(--bad); text-align: right; }
+.validation-error:empty { display: none; }
+
 /* ---- Preferences / small screens ----------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {

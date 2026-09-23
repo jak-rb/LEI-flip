@@ -118,10 +118,10 @@
             <p class="detail-searched">
                 <span data-cs="Hledali jste:" data-en="You searched:">You searched:</span>
                 <strong>{{ rec.input.name or rec.input.isin }}</strong>
-                {% if rec.input.country or rec.input.city %}
-                ({{ rec.input.country }}{% if rec.input.city %},
-                {{ rec.input.city }}{% endif %})
-                {% endif %}
+                {% set place = [rec.input.country or '',
+                                rec.input.city or '']
+                               |map('trim')|select|join(', ') %}
+                {% if place %}({{ place }}){% endif %}
             </p>
 
             <div class="results-table-wrap">
@@ -202,7 +202,15 @@
             </div>
         </article>
         {% endfor %}
+
+        <!-- Filled by app.js when saving a decision fails. -->
+        <p class="validation-error" role="alert"></p>
     </section>
+    <!-- Shown by app.js once a decision is saved: the summary card
+         updates at once, the two tables below on the next load. -->
+    <p class="results-page-note tables-reload-hint" hidden
+       data-cs="Tabulky níže se aktualizují po obnovení stránky."
+       data-en="Reload the page to update the tables below.">Reload the page to update the tables below.</p>
     {% endif %}
 
     <!-- Matched records -->
@@ -268,7 +276,7 @@
                     <td>{{ n.searched }}</td>
                     <td>{{ n.country }}</td>
                     <td>{{ n.city }}</td>
-                    <td>{{ n.notes }}</td>
+                    <td data-en="{{ n.notes }}" data-cs="{{ n.notes|czech_note }}">{{ n.notes }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
