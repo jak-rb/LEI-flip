@@ -207,6 +207,19 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    `core/storage.create_search`. Nothing is looked up yet. Unusable input
    returns 400 with an `error` message the search page shows next to its
    Search button (this replaced the separate pre-flight endpoint).
+   Upload rules: blank rows are skipped, and the first non-blank row is
+   dropped when it holds column labels (Name/ISIN/Země/PSČ,
+   PARTY_FULL_NAME/ISIN_IDENT, ...; `core/upload._is_header`, never when
+   its second cell is a valid ISIN). A row with a value over its
+   `InputEntity` length limit refuses the whole file, naming the row (as
+   numbered in the file), the field and the limit - rows are never dropped
+   or truncated silently. Parsing stops at the 101st entity row ("more
+   than 100"). An `.xlsx` is read with `reset_dimensions()` and at most 6
+   columns (50 in the semicolon-lines mode), through a guarded zip archive
+   that charges every read to a budget (50 MB unpacked, 500,000 XML nodes)
+   and refuses DTDs, so a small crafted file cannot tie the function up;
+   `core/upload._load_workbook` relies on openpyxl 3.1.5 internals
+   (`ExcelReader.archive`), so re-check it when upgrading openpyxl.
 2. The browser navigates to `/results?job=<id>`. For an unfinished job the
    page renders the summary card in its running state and `public/app.js`
    calls `POST /api/jobs/<id>/run` in a loop.
@@ -215,8 +228,23 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    passed) against live GLEIF with `core/lookup.py`, appends their result rows
    with `storage.append_results`, and returns the progress: `searched`,
    `total`, the matched / need-validation / unmatched counts, and `done`.
-   A GLEIF outage saves whatever completed and answers 503 with an `error`;
-   the card shows it and a reload resumes from the saved progress.
+   The budget only stops a call from starting another lookup; the GLEIF
+   client's deadline (`GleifClient.deadline` = start +
+   `RUN_DEADLINE_SECONDS`, 120 s, also passed to OpenFIGI) bounds the one
+   under way: no request or retry starts after it and each timeout
+   (`REQUEST_TIMEOUT`, 10 s) is cut to the time left. A lookup cut off by
+   the deadline is not stored; the next call starts it again.
+   A GLEIF outage (connection errors, timeouts) saves whatever completed
+   and answers 503 with `error`/`error_cs`; the card shows it and a reload
+   resumes from the saved progress. When GLEIF rate-limits (429) for
+   longer than the call has left, the reply is 200 with the progress plus
+   `throttled` and `retry_after`, and the page counts the wait down
+   (2-30 s) and continues by itself. An entity whose lookup fails for good
+   is stored as a NO_MATCH row whose note starts "Lookup failed": at once
+   for an unexpected error or a query GLEIF refuses (a 4xx), and after
+   `RUN_MAX_ATTEMPTS` (3) calls for repeated GLEIF server errors or a
+   lookup too slow for a whole call of its own - so a job always
+   finishes.
 4. When `done` the page reloads and the server renders the detailed tables.
 
 Each stored result row is the entity's `input`, its `match` (a `LookupResult`)
@@ -230,8 +258,14 @@ mapping, with an OpenFIGI review fallback.
 
 **The store** (`core/storage.py`) is one `searches` table: `job_id`,
 `created_at` (ISO-8601 UTC text), `mode`, `searched` (entities looked up so
-far), `found` (asserted matches so far), `query` (the entities, JSON) and
-`results` (the rows, JSON). Rows older than 30 days are pruned on every write.
+far), `found` (asserted matches so far), `query` (the entities, JSON; a
+record may carry `failed_attempts`, counted by
+`storage.record_failed_attempt`) and `results` (the rows, JSON). Rows older
+than 30 days are pruned when a search is created. Job ids are 32 lowercase
+hex characters (`secrets.token_hex(16)`): `get_search`, `append_results` and
+`record_decision` return None for any other id without querying (a NUL made
+Postgres raise), and `append_results` never stores rows past the job's
+entities.
 The backend is chosen at import from the environment: `DATABASE_URL` (or
 `POSTGRES_URL`) selects Postgres through psycopg, otherwise SQLite at
 `LEI_DB_PATH` or under the system temp dir. Both share one DDL and one set of
@@ -244,7 +278,15 @@ Unmatched), the orange validation stepper (top 3 candidates per near-miss,
 confirm one or "None of these", saved via `POST /api/decision` ->
 `storage.record_decision`), the matched and no-match tables, and the CSV /
 Excel downloads built by `core/export.py` (a confirmed pick exports as
-`MANUAL_MATCH`, a rejection as `MANUAL_NO_MATCH`). The overall percent shown
+`MANUAL_MATCH`, a rejection as `MANUAL_NO_MATCH`; characters XML forbids are
+dropped and formula-like cells neutralised). A decision is accepted only
+once the job is finished, and only on a row the stepper offers (candidates,
+no algorithmic match); otherwise the reply is 404, and a body that is not
+`{job_id: str, index: int, choice: str}` gets a 400 with `error`/`error_cs`.
+`record_decision` writes with a compare-and-swap on the stored results
+(`UPDATE ... WHERE results = <the text it read>`, retried on a miss), so
+simultaneous decisions all persist; while a save is pending the stepper
+disables its decision buttons. The overall percent shown
 per candidate is display-only (`core/lookup._overall_match`) and never gates
 a match.
 

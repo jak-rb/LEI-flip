@@ -88,13 +88,15 @@ _LINE_COLUMNS = 50
 
 #: Most an .xlsx may make openpyxl read: bytes unpacked, and XML nodes
 #: (elements and attributes) parsed, counting a part again each time it
-#: is read. A real 100-entity workbook takes under 10,000 nodes, while
+#: is read. A real 100-entity workbook takes under 10,000 nodes, and
+#: the budget leaves room for some 250,000 shared strings from other
+#: sheets (about 5 s to read), while
 #: a crafted file of a few kilobytes can unpack to gigabytes, hold
 #: millions of tiny elements (openpyxl spends up to some 10
 #: microseconds on each node), or name one part from many places so
 #: that it is parsed again and again.
 _MAX_READ_BYTES = 50 * 1024 * 1024
-_MAX_READ_NODES = 150_000
+_MAX_READ_NODES = 500_000
 
 #: The last row of an Excel worksheet. A row numbered past it is not
 #: from Excel, and would make openpyxl yield every empty row before it.

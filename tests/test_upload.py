@@ -494,7 +494,7 @@ def test_one_chart_drawn_many_times_is_refused_quickly():
     def drawing(old):
         start = old.index(b"<absoluteAnchor>")
         end = old.index(b"</absoluteAnchor>") + len(b"</absoluteAnchor>")
-        return old[:start] + old[start:end] * 500 + old[end:]
+        return old[:start] + old[start:end] * 2000 + old[end:]
 
     def chart_sheet_rels(old):
         start = old.index(b"<Relationship ")

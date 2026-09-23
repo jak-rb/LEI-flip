@@ -53,11 +53,19 @@ Shipped today on branch `vercel`, all deployed to production
 
 ## What to do next, in order
 
+**Progress (2026-09-23, later session):** sections 1-6 are done and
+deployed (commit 5b0b3ae for the Excel file, then the merged fix
+branches). The user's file ran live once (job `9b94f889...`: 7 of 7
+searched, 1 matched, 4 to validate, 2 not found). The user chose all
+four groups of section 7 (upload edge cases, single form + 413, results
+page UX, country UK/ČR - the last one needs the matcher audit, so ask
+before any live GLEIF run).
+
 For every fix: write a failing test first, fix, run pytest, then commit,
 push `vercel` and `vercel deploy --prod --yes` (standing rule, do not
 ask), and re-check production with job-free probes.
 
-### 1. The user's Excel file (they asked for this explicitly)
+### 1. The user's Excel file (they asked for this explicitly) - DONE
 
 `tests/fixtures/test_lei.xlsx` is a semicolon CSV that was opened in
 Excel with the wrong delimiter: each whole line sits in column A,
@@ -83,7 +91,7 @@ Plan agreed with the user:
   on the live site through the page (the user asked for this) and show
   them the results table.
 
-### 2. Rows lost silently and header detection (high)
+### 2. Rows lost silently and header detection (high) - DONE
 
 - Any over-long field (name > 500, ISIN or ZIP > 20, ...) makes
   `_rows_to_entities` drop the whole row without a word; a 101-row file
@@ -101,7 +109,7 @@ Plan agreed with the user:
   outside the exact word list are searched although Help says header
   names "don't matter" (xlsx-formats#F10).
 
-### 3. Excel export crashes or corrupt files (high)
+### 3. Excel export crashes or corrupt files (high) - DONE
 
 ASCII control characters (NUL, 0x01-0x1F except tab/LF/CR) anywhere in
 stored text make `/download/excel` answer 500; U+FFFE/U+FFFF produce a
@@ -111,7 +119,7 @@ hostile-uploads#F1-F2, results-exports#F2). Fix in `core/export.py`
 `_sanitize`: strip `openpyxl.cell.cell.ILLEGAL_CHARACTERS_RE` matches
 plus U+FFFE/U+FFFF.
 
-### 4. Jobs that can never finish (high)
+### 4. Jobs that can never finish (high) - DONE
 
 - Any exception other than `GleifApiError` in a lookup (malformed GLEIF
   reply, odd OpenFIGI data) gives an HTML 500, throws away the rows the
@@ -130,7 +138,7 @@ plus U+FFFE/U+FFFF.
   Vercel's 300 s (job-runner#F7): the time budget is only checked
   between lookups.
 
-### 5. Decisions API and races (high)
+### 5. Decisions API and races (high) - DONE
 
 - `/api/decision` answers 500 for a JSON body that is not an object,
   or a list/dict `job_id` or `choice` (results-exports#F1,
@@ -149,7 +157,7 @@ plus U+FFFE/U+FFFF.
   `/run` and `/decision` answer 500 (results-exports#F5): validate the
   job id format (32 hex chars) before touching the store.
 
-### 6. Slow or memory-hungry uploads (high/medium)
+### 6. Slow or memory-hungry uploads (high/medium) - DONE
 
 - A 5 KB .xlsx with one stray cell at XFD1048576 or a forged
   `<dimension>` exhausts memory and time; a shared-strings bomb runs
