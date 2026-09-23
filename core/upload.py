@@ -7,6 +7,7 @@ like a header is skipped. Uses openpyxl for .xlsx and the stdlib csv
 module for .csv, so no extra dependency is needed.
 """
 
+import codecs
 import csv
 import io
 import logging
@@ -30,6 +31,12 @@ _HEADER_CELLS = frozenset({
     "name", "entity", "entity name", "company", "company name",
     "issuer", "issuer name", "firma", "nazev", "název",
 })
+
+#: Shown for a .csv whose content cannot be read as rows of text.
+_UNREADABLE_CSV = (
+    "Could not read the .csv file. Save it from Excel as CSV UTF-8, "
+    "or upload the .xlsx instead."
+)
 
 
 def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
@@ -98,7 +105,12 @@ def _read_xlsx(content: bytes) -> list[list[str]]:
 
 def _decode(content: bytes) -> str:
     """Decode CSV bytes, trying common encodings (incl. Czech cp1250)."""
-    for encoding in ("utf-8-sig", "utf-8", "cp1250", "latin-1"):
+    encodings = ("utf-8-sig", "utf-8", "cp1250", "latin-1")
+    # UTF-16 (what Windows PowerShell's `>` writes, for one) starts
+    # with a byte-order mark and would decode as garbage below.
+    if content.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        encodings = ("utf-16",) + encodings
+    for encoding in encodings:
         try:
             return content.decode(encoding)
         except (UnicodeDecodeError, ValueError):
@@ -109,10 +121,21 @@ def _decode(content: bytes) -> str:
 def _read_csv(content: bytes) -> list[list[str]]:
     """Read CSV bytes into rows, auto-detecting comma vs semicolon."""
     text = _decode(content)
+    # Text never holds a NUL: this is binary content, such as an Excel
+    # workbook renamed to .csv, which would only parse into garbage.
+    if "\x00" in text:
+        logger.warning("Uploaded .csv file is binary (contains NUL)")
+        raise ValueError(_UNREADABLE_CSV)
     sample = "\n".join(text.splitlines()[:5])
     delimiter = ";" if sample.count(";") > sample.count(",") else ","
-    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
-    return [[cell.strip() for cell in row] for row in reader]
+    # newline="" leaves line endings to the csv module, which accepts
+    # \n, \r\n and the lone \r of old Mac files alike.
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+    try:
+        return [[cell.strip() for cell in row] for row in reader]
+    except csv.Error as error:  # e.g. a cell over the 128 KB limit
+        logger.warning("Failed to parse uploaded .csv file: %s", error)
+        raise ValueError(_UNREADABLE_CSV) from error
 
 
 def _drop_header(rows: list[list[str]]) -> list[list[str]]:

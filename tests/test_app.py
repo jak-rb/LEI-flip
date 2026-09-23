@@ -9,6 +9,7 @@ anything else -> no match.
 import io
 
 import pytest
+from openpyxl import Workbook
 
 import app as app_module
 from core import storage
@@ -58,6 +59,14 @@ def client(monkeypatch):
 
 def _create_single(client, **fields):
     return client.post("/api/jobs", data={"mode": "single", **fields})
+
+
+def _create_bulk(client, content):
+    return client.post(
+        "/api/jobs",
+        data={"mode": "bulk", "file_upload": (io.BytesIO(content), "in.csv")},
+        content_type="multipart/form-data",
+    )
 
 
 def _run(client, job_id):
@@ -191,6 +200,29 @@ def test_bulk_rejects_wrong_extension_and_empty_file(client):
     )
     assert empty.status_code == 400
     assert "empty" in empty.get_json()["error"].lower()
+
+
+def test_bulk_reads_utf16_and_cr_files_and_refuses_unreadable(client):
+    rows = "Name,ISIN,Country\r\nMatch AG,,DE\r\nNobody s.r.o.,,CZ\r\n"
+    # Windows PowerShell's `>` writes UTF-16; old Mac files end each
+    # line with a lone \r. Both used to crash the upload with a 500.
+    utf16 = rows.encode("utf-16")
+    cr_only = rows.replace("\r\n", "\r").encode()
+    for content in (utf16, cr_only):
+        created = _create_bulk(client, content)
+        assert created.status_code == 200, created.get_json()
+        assert created.get_json()["total"] == 2
+
+    # A workbook renamed to .csv, or a cell over the csv module's field
+    # limit, is refused with a message instead of a 500.
+    workbook = Workbook()
+    workbook.active.append(["Match AG", None, "DE"])
+    renamed = io.BytesIO()
+    workbook.save(renamed)
+    for content in (renamed.getvalue(), b"Match AG,," + b"x" * 200_000):
+        refused = _create_bulk(client, content)
+        assert refused.status_code == 400
+        assert "Could not read the .csv file" in refused.get_json()["error"]
 
 
 def test_gleif_outage_keeps_progress_and_resumes(client, monkeypatch):
