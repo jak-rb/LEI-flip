@@ -28,8 +28,15 @@ Shipped today on branch `vercel`, all deployed to production
 - Run `wf_fa931678-843`, launched from session
   `551abfa2-90b0-4c24-8e4e-85e1877b2e58`: 8 areas, 118 checklist cases
   plus about 10 invented cases per tester, 3 verifiers per area, and a
-  completeness-critic round. All testers and all 27 verifiers finished;
-  only the final synthesis may still have been running at handoff.
+  completeness-critic round. Everything finished (38 agents).
+- **Final report: `docs/crazy-test-2026-09-23-final.md`** (local,
+  gitignored): 100 failures reported, 63 confirmed, merged into 32
+  distinct bugs (9 high, 13 medium, 10 low), each with repro, location
+  and suggested fix. Its ranking is the canonical order; the batches
+  below group the same bugs by code area. Today's changes worked as
+  designed; every confirmed bug is in older code.
+- Repro scripts it cites (originally in the session scratchpad) are
+  copied to `docs/crazy-test-repro/<area>/`.
 - Confirmed = at least 2 of 3 verifiers reproduced it and called it a
   real bug. Keys below are `area#Fn` as in the digest.
 - Full digest with every repro and verdict (local only, gitignored):
