@@ -315,8 +315,8 @@ def test_cp1250_czech_text_still_decodes_as_cp1250(names):
 
 
 def test_mostly_cp1250_with_one_utf8_row_stays_cp1250():
-    # Not a UTF-8 "ň": it holds a byte cp1250 does not define, which
-    # sends the whole file to latin-1, as before.
+    # Not a UTF-8 "ň": it holds a byte cp1250 does not define, so the
+    # file stays cp1250 and only that row reads oddly.
     stray = "Česká pošta, s.p."
     content = (
         _lines(CZECH_NAMES).encode("cp1250") + _lines([stray]).encode()

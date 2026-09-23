@@ -13,9 +13,6 @@ The app is a Flask application deployed on [Vercel](https://vercel.com)
 (Python runtime) with a Neon Postgres store for the 30-day search
 history. It runs locally with no setup, falling back to SQLite.
 
-> **Work in progress:** open test findings and next steps are in
-> [HANDOFF.md](HANDOFF.md).
-
 ## Endpoints
 
 | Route | Purpose |

@@ -207,10 +207,14 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    `core/storage.create_search`. Nothing is looked up yet. Unusable input
    returns 400 with an `error` message the search page shows next to its
    Search button (this replaced the separate pre-flight endpoint).
-   Upload rules: blank rows are skipped, and the first non-blank row is
-   dropped when it holds column labels (Name/ISIN/Země/PSČ,
-   PARTY_FULL_NAME/ISIN_IDENT, ...; `core/upload._is_header`, never when
-   its second cell is a valid ISIN). A row with a value over its
+   Upload rules: blank rows (also cells of only whitespace or invisible
+   format characters, `core.models.is_blank`) are skipped, and the first
+   non-blank row is dropped when it holds column labels (Name/ISIN/Země/PSČ,
+   PARTY_FULL_NAME/ISIN_IDENT, "ISIN (optional)", ...;
+   `core/upload._is_header`): never when its ISIN is valid or it has at
+   least as many data-looking cells (a digit, a country name or code) as
+   labels, so "Party City,,US,..." stays data; a one-cell title row above
+   a header is dropped with it. A row with a value over its
    `InputEntity` length limit refuses the whole file, naming the row (as
    numbered in the file), the field and the limit - rows are never dropped
    or truncated silently. Parsing stops at the 101st entity row ("more
@@ -220,6 +224,15 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    and refuses DTDs, so a small crafted file cannot tie the function up;
    `core/upload._load_workbook` relies on openpyxl 3.1.5 internals
    (`ExcelReader.archive`), so re-check it when upgrading openpyxl.
+   Cells are read as Excel shows them: `_xHHHH_` escapes are decoded, and
+   a numeric postal code with a zeros-only number format keeps its leading
+   zeros (1001 as "000 00" -> "010 01"). The semicolon-lines mode is
+   chosen on the rebuilt lines (cells joined with commas), so names with
+   commas ("ČEZ, a. s.") work, while a plain sheet whose names hold ';'
+   keeps its columns. Text files: UTF-16 by BOM, then UTF-8; a file that
+   is mostly valid UTF-8 keeps UTF-8 with U+FFFD for the bad bytes, else
+   cp1250 (undefined bytes become U+FFFD). The extension is the part from
+   the last dot, so a file named just ".csv" is read.
 2. The browser navigates to `/results?job=<id>`. For an unfinished job the
    page renders the summary card in its running state and `public/app.js`
    calls `POST /api/jobs/<id>/run` in a loop.
@@ -234,17 +247,25 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    under way: no request or retry starts after it and each timeout
    (`REQUEST_TIMEOUT`, 10 s) is cut to the time left. A lookup cut off by
    the deadline is not stored; the next call starts it again.
-   A GLEIF outage (connection errors, timeouts) saves whatever completed
-   and answers 503 with `error`/`error_cs`; the card shows it and a reload
-   resumes from the saved progress. When GLEIF rate-limits (429) for
-   longer than the call has left, the reply is 200 with the progress plus
-   `throttled` and `retry_after`, and the page counts the wait down
-   (2-30 s) and continues by itself. An entity whose lookup fails for good
-   is stored as a NO_MATCH row whose note starts "Lookup failed": at once
-   for an unexpected error or a query GLEIF refuses (a 4xx), and after
-   `RUN_MAX_ATTEMPTS` (3) calls for repeated GLEIF server errors or a
-   lookup too slow for a whole call of its own - so a job always
-   finishes.
+   A GLEIF outage saves whatever completed and answers 503 with
+   `error`/`error_cs`; the card shows it and a reload resumes from the
+   saved progress. An outage is a connection error or timeout, or a GLEIF
+   error that a one-record probe search (`GleifClient.is_answering`) gets
+   too: then nothing is stored and no attempt is counted. While GLEIF
+   answers the probe, the error is the entity's: a query GLEIF refuses (a
+   4xx other than 408/425/429) is stored at once as a NO_MATCH row whose
+   note starts "Lookup failed", and repeated server errors (5xx, 408, 425,
+   a non-JSON 200) or a lookup too slow for a whole call of its own after
+   `RUN_MAX_ATTEMPTS` (3) calls; an unexpected error, or a stored record
+   that no longer passes the input rules, is failed at once - so a job
+   always finishes. When GLEIF rate-limits (429) for longer than the call
+   has left, the reply is 200 with the progress plus `throttled` and
+   `retry_after`, and the page counts the wait down (2-30 s) and continues
+   by itself; a cut-off counts as throttled when the lookup's own
+   rate-limit waits (`GleifClient.rate_limit_waits`, reset per lookup)
+   left it less than `RUN_DEADLINE_SECONDS - RUN_TIME_BUDGET_SECONDS` of
+   its own time. Known limit: requests' timeout bounds each socket read,
+   so a reply that trickles in byte by byte can outlast the deadline.
 4. When `done` the page reloads and the server renders the detailed tables.
 
 Each stored result row is the entity's `input`, its `match` (a `LookupResult`)
@@ -279,14 +300,20 @@ confirm one or "None of these", saved via `POST /api/decision` ->
 `storage.record_decision`), the matched and no-match tables, and the CSV /
 Excel downloads built by `core/export.py` (a confirmed pick exports as
 `MANUAL_MATCH`, a rejection as `MANUAL_NO_MATCH`; characters XML forbids are
-dropped and formula-like cells neutralised). A decision is accepted only
+dropped - those that read as whitespace (VT, FF, FS-US) become a space - and
+formula-like cells neutralised; notes stay English). A decision is accepted only
 once the job is finished, and only on a row the stepper offers (candidates,
 no algorithmic match); otherwise the reply is 404, and a body that is not
 `{job_id: str, index: int, choice: str}` gets a 400 with `error`/`error_cs`.
 `record_decision` writes with a compare-and-swap on the stored results
 (`UPDATE ... WHERE results = <the text it read>`, retried on a miss), so
-simultaneous decisions all persist; while a save is pending the stepper
-disables its decision buttons. The overall percent shown
+simultaneous decisions all persist; on SQLite each attempt first takes the
+write lock (`BEGIN IMMEDIATE`, `storage._Connection.begin_write`, also used
+by `record_failed_attempt`), and on Postgres the losing UPDATE waits on the
+row lock and re-checks its WHERE. While a save is pending the stepper
+disables its decision buttons; after it, the card's counts update from the
+reply's `counts`, and a failed save shows a bilingual message. The results
+page shows lookup notes in both languages (`core/notes.czech_note`). The overall percent shown
 per candidate is display-only (`core/lookup._overall_match`) and never gates
 a match.
 
@@ -331,9 +358,15 @@ a match.
 
 ### Current state
 
-**Work in progress (2026-09-23): read `HANDOFF.md` first.** It holds the
-confirmed findings of a large test run, grouped into fix batches, and
-the next steps (starting with the user's `tests/fixtures/test_lei.xlsx`).
+The 2026-09-23 test run's backlog (the former `HANDOFF.md`) is done: every
+confirmed defect was fixed test-first, re-verified by an adversarial pass,
+and shipped. Open questions left for the user: raising the `.xlsx` read
+budget further (a workbook whose other sheets hold over about 250,000
+shared strings is refused with a clear message); whether digit labels such
+as "ADDR_LINE_1" should count as header labels (a header with as many of
+them as real labels is read as an entity); collapsing irregular whitespace
+inside multi-word legal forms, which would help recall but changes matching
+and needs the matcher audit; and the trickling-reply limit above.
 
 Feature-complete and deployable. Single and bulk search run against live
 GLEIF through the job endpoints, every search is persisted under a `job_id`
