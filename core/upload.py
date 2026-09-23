@@ -23,15 +23,15 @@ import re
 import xml.parsers.expat
 import zipfile
 from collections.abc import Iterable, Iterator
-from pathlib import Path
 
 from openpyxl.chartsheet import Chartsheet
 from openpyxl.reader.excel import ExcelReader
+from openpyxl.utils.escape import unescape
 from pydantic import ValidationError
 from unidecode import unidecode
 
 from .isin import is_valid_isin, normalize_isin
-from .models import InputEntity, InputError
+from .models import InputEntity, InputError, is_blank
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,13 @@ _MAX_READ_NODES = 500_000
 #: from Excel, and would make openpyxl yield every empty row before it.
 _LAST_ROW = 1_048_576
 
+#: A number format that only pads a number with zeros, its digits
+#: maybe grouped by spaces or hyphens, which Excel saves escaped or
+#: quoted: "00000", "000\ 00" (the Czech and Slovak postal code) or
+#: "00000\-0000" (a US ZIP+4). They show 1001 as "01001", "010 01"
+#: and "00000-1001".
+_ZERO_PADDED_FORMAT = re.compile(r'0(?:0|\\?[ -]|"[ -]+")*')
+
 #: Text formats read with the csv module: extension -> delimiter, where
 #: None means detect it. Excel's "Text (Tab delimited)" and "Unicode
 #: Text" exports, and cells copied from Excel into a text editor, are
@@ -135,7 +142,10 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
     if not content:
         raise InputError("The file is empty.", "Soubor je prázdný.")
 
-    ext = Path(filename).suffix.lower()
+    # The part from the last dot, as app.py checks it: to pathlib, a
+    # file named just ".csv" has no extension.
+    _, dot, ext = filename.lower().rpartition(".")
+    ext = dot + ext
     if ext == ".xlsx":
         rows = _read_xlsx(content)
     elif ext in _TEXT_DELIMITERS:
@@ -176,9 +186,14 @@ def _read_xlsx(content: bytes) -> list[_Row]:
         if _holds_semicolon_lines(sheet):
             rows = _entity_rows(_split_semicolon_lines(sheet))
         else:
+            decoded: dict[str, str] = {}
             rows = _entity_rows(
-                (number, [cell.strip() for cell in cells])
-                for number, cells in _filled_rows(sheet, len(_COLUMNS))
+                (number, [
+                    _decode_escapes(cell, decoded).strip() for cell in cells
+                ])
+                for number, cells in _filled_rows(
+                    sheet, len(_COLUMNS), _COLUMNS.index("zip_code")
+                )
             )
         workbook.close()
     except _TooMuchData:
@@ -283,22 +298,83 @@ def _load_workbook(content: bytes):
     return reader.wb
 
 
-def _filled_rows(sheet, width: int) -> Iterator[tuple[int, list[str]]]:
+def _filled_rows(
+    sheet, width: int, zip_index: int | None = None
+) -> Iterator[tuple[int, list[str]]]:
     """Yield (worksheet row number, cells as text) of non-blank rows.
 
-    Reads the first ``width`` columns of every row.
+    Reads the first ``width`` columns of every row, text as it is
+    saved: its escapes are left to the caller (see _decode_escapes).
+    Given a ``zip_index``, the cell there is a postal code, and a number
+    in it keeps the zeros its format shows (see _postal_code_text).
+    That takes openpyxl's cell objects, which cost more than bare
+    values, so only then are they read.
     """
-    rows = sheet.iter_rows(max_col=width, values_only=True)
-    for number, values in enumerate(rows, start=1):
+    with_cells = zip_index is not None
+    rows = sheet.iter_rows(max_col=width, values_only=not with_cells)
+    for number, row in enumerate(rows, start=1):
         if number > _LAST_ROW:
             raise ValueError(f"row {number} is past Excel's last row")
+        values = [cell.value for cell in row] if with_cells else row
         # Checked on the raw values first, as it is cheap: one stray
         # far-away cell makes openpyxl yield a million empty rows.
         if values.count(None) == len(values):
             continue
         cells = ["" if cell is None else str(cell) for cell in values]
+        if with_cells:
+            cells[zip_index] = _postal_code_text(
+                row[zip_index], cells[zip_index]
+            )
         if any(cell.strip() for cell in cells):
             yield number, cells
+
+
+def _decode_escapes(text: str, decoded: dict[str, str]) -> str:
+    """Text read from an .xlsx, with Excel's _xHHHH_ escapes decoded.
+
+    Excel saves a character XML cannot hold, such as the carriage
+    return of a line break typed in a cell, as "_x000D_" (and a real
+    "_x" as "_x005F_x"); openpyxl leaves them as they are. An escaped
+    UTF-16 pair of surrogates becomes its one character, and a lone
+    surrogate, which is no character, becomes U+FFFD. One shared
+    string can fill any number of cells, so each text is decoded once
+    and kept in ``decoded``.
+    """
+    if "_x" not in text:
+        return text
+    if text not in decoded:
+        decoded[text] = unescape(text).encode(
+            "utf-16", "surrogatepass"
+        ).decode("utf-16", "replace")
+    return decoded[text]
+
+
+def _postal_code_text(cell, text: str) -> str:
+    """A postal code cell's text, with the zeros its format shows.
+
+    A postal code typed in Excel as a number loses its leading zeros,
+    which a format of zeros (see _ZERO_PADDED_FORMAT) shows again:
+    1001 formatted "000 00" is shown as "010 01". Any other cell, and
+    a number with more digits than the format has zeros, keeps
+    ``text``, its value as text.
+    """
+    value = cell.value
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if type(value) is not int or value < 0:  # bool is an int too
+        return text
+    try:
+        number_format = cell.number_format
+    except IndexError:  # a style or format the workbook lacks
+        return text
+    if not _ZERO_PADDED_FORMAT.fullmatch(number_format):
+        return text
+    pattern = number_format.replace("\\", "").replace('"', "")
+    zeros = pattern.count("0")
+    if len(str(value)) > zeros:
+        return text
+    digits = iter(str(value).zfill(zeros))
+    return "".join(next(digits) if char == "0" else char for char in pattern)
 
 
 def _holds_semicolon_lines(sheet) -> bool:
@@ -323,31 +399,63 @@ def _holds_semicolon_lines(sheet) -> bool:
 
 def _split_semicolon_lines(sheet) -> Iterator[_Row]:
     """Rebuild each row's original line and split it at semicolons."""
+    decoded: dict[str, str] = {}
     for number, cells in _filled_rows(sheet, _LINE_COLUMNS):
         while not cells[-1].strip():
             cells.pop()
         # Excel split the line at its commas, so joining the cells with
         # commas restores it (a cell keeps its leading space). Each line
         # is parsed on its own: an unbalanced quote must not swallow
-        # the rows after it.
+        # the rows after it. Escapes are decoded only in the fields: a
+        # line break decoded before would stand outside any quotes,
+        # which the csv module refuses.
         line = ",".join(cells)
         fields = next(csv.reader([line], delimiter=";"), [])
-        yield number, [field.strip() for field in fields]
+        yield number, [
+            _decode_escapes(field, decoded).strip() for field in fields
+        ]
 
 
 def _decode(content: bytes) -> str:
-    """Decode CSV bytes, trying common encodings (incl. Czech cp1250)."""
-    encodings = ("utf-8-sig", "utf-8", "cp1250", "latin-1")
+    """Decode CSV bytes, trying common encodings (incl. Czech cp1250).
+
+    UTF-8 with a few invalid bytes, such as a row pasted in from a
+    cp1250 file or a character cut off at the end, stays UTF-8 with
+    U+FFFD for those bytes (see _is_mostly_utf8): read as cp1250, every
+    Czech letter in it would be garbled.
+    """
     # UTF-16 (what Windows PowerShell's `>` writes, for one) starts
     # with a byte-order mark and would decode as garbage below.
     if content.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
-        encodings = ("utf-16",) + encodings
-    for encoding in encodings:
         try:
-            return content.decode(encoding)
-        except (UnicodeDecodeError, ValueError):
-            continue
-    return content.decode("latin-1")  # latin-1 never fails
+            return content.decode("utf-16")
+        except UnicodeDecodeError:
+            pass
+    try:
+        return content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    text = content.decode("utf-8-sig", errors="replace")
+    if _is_mostly_utf8(text):
+        return text
+    try:
+        return content.decode("cp1250")
+    except UnicodeDecodeError:
+        return content.decode("latin-1")  # latin-1 never fails
+
+
+def _is_mostly_utf8(text: str) -> bool:
+    """Whether text decoded as UTF-8 with replacements is UTF-8 still.
+
+    It is when its valid characters outside ASCII outnumber the U+FFFD
+    replacements more than three to one. Czech text in cp1250 gives
+    mostly replacements: its accented letters are bytes that UTF-8
+    takes for lead or continuation bytes, and they seldom line up into
+    a valid sequence. A UTF-8 file with a stray byte or two has few.
+    """
+    replaced = text.count("\ufffd")
+    non_ascii = len(text) - len(text.encode("ascii", errors="ignore"))
+    return replaced * 3 < non_ascii - replaced
 
 
 def _read_csv(content: bytes, delimiter: str | None) -> list[_Row]:
@@ -402,8 +510,18 @@ def _entity_rows(rows: Iterable[_Row]) -> list[_Row]:
     """
     kept = []
     header_checked = False
+    # Whether each name or ISIN text is blank: one .xlsx shared string
+    # can fill any number of cells, and such a row is not counted.
+    blank: dict[str, bool] = {}
     for number, cells in rows:
         cells = cells[:len(_COLUMNS)]
+        # A name or ISIN with no visible character, such as a lone
+        # zero-width space, is as empty as it looks.
+        for index, cell in enumerate(cells[:2]):
+            if cell not in blank:
+                blank[cell] = is_blank(cell)
+            if blank[cell]:
+                cells[index] = ""
         if not any(cells):
             continue
         if not header_checked:

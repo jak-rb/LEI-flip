@@ -2,6 +2,7 @@
 """Data models for the LEI Lookup Tool."""
 
 import math
+import unicodedata
 from enum import Enum
 from typing import Optional
 
@@ -45,6 +46,25 @@ class WarningCode(str, Enum):
     ADDRESS_CONTRADICTION = "ADDRESS_CONTRADICTION"
 
 
+def is_blank(text: Optional[str]) -> bool:
+    """Whether a value holds no visible character.
+
+    Whitespace and Unicode format characters (category Cf, such as the
+    zero-width space U+200B or the byte-order mark U+FEFF) show
+    nothing, so a value made only of them is as empty as it looks.
+
+    Args:
+        text: The value to check, or None.
+
+    Returns:
+        True for None, "" and such invisible-only values.
+    """
+    return not text or all(
+        char.isspace() or unicodedata.category(char) == "Cf"
+        for char in text
+    )
+
+
 class InputEntity(BaseModel):
     """Entity to look up, from a single form or a bulk upload row."""
 
@@ -61,10 +81,16 @@ class InputEntity(BaseModel):
     @field_validator("name")
     @classmethod
     def _normalize_name(cls, v: Optional[str]) -> Optional[str]:
-        """Normalize a blank or whitespace-only name to None."""
+        """Normalize a blank name (see is_blank) to None."""
         # A blank cell must never silently become a query that
         # mismatches everything; treat it as "no name given" instead.
-        return (v or "").strip() or None
+        return None if is_blank(v) else v.strip()
+
+    @field_validator("isin")
+    @classmethod
+    def _normalize_blank_isin(cls, v: Optional[str]) -> Optional[str]:
+        """Normalize a blank ISIN (see is_blank) to None."""
+        return None if is_blank(v) else v
 
     @model_validator(mode="after")
     def _require_name_or_isin(self) -> "InputEntity":
