@@ -297,6 +297,9 @@ def _hook_once(monkeypatch, method, wanted, rival):
     """Run ``rival`` once around the first call ``wanted`` picks."""
     original = getattr(storage._Connection, method)
     armed = [True]
+    # No write lock from the read on, as on Postgres: on SQLite the
+    # rival would queue behind it instead of landing in between.
+    monkeypatch.setattr(storage._Connection, "begin_write", lambda self: None)
 
     def hooked(self, sql, params=()):
         if not (armed[0] and wanted(sql)):
@@ -516,3 +519,4 @@ def test_stepper_keeps_the_record_moved_to_during_a_save(tmp_path):
     assert seen["savedDecision"] == "confirmed"
     assert seen["shownAfterSave"] == 1
     assert seen["enabledAfterSave"] is True
+

@@ -160,8 +160,8 @@ def test_excel_escapes_in_semicolon_lines_are_decoded():
 
 
 def test_a_decoded_control_character_still_downloads(client):
-    # The Excel export drops characters XML forbids, such as the
-    # vertical tab that "_x000B_" decodes to.
+    # XML forbids the vertical tab that "_x000B_" decodes to; read as
+    # whitespace, it exports as a space.
     content = _xlsx([["Bad_x000B_Name a.s.", None, "CZ"]])
     created = _create_bulk(client, content, "in.xlsx")
     assert created.status_code == 200, created.get_json()
@@ -173,7 +173,7 @@ def test_a_decoded_control_character_still_downloads(client):
     assert excel.status_code == 200
     sheet = load_workbook(io.BytesIO(excel.data)).active
     names = [row[0] for row in sheet.iter_rows(values_only=True)]
-    assert "BadName a.s." in names
+    assert "Bad Name a.s." in names
 
 
 def test_a_semicolon_line_with_an_escaped_line_break_is_read():

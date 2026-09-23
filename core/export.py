@@ -2,9 +2,9 @@
 """Build CSV and Excel exports from a stored search.
 
 One row per searched entity, carrying the lookup's "answer" columns
-(used by the /download routes). Characters XML forbids are dropped, and
-cells that a spreadsheet could read as a formula are neutralised
-(CWE-1236).
+(used by the /download routes). Characters XML forbids are dropped
+(those that read as whitespace become a space), and cells that a
+spreadsheet could read as a formula are neutralised (CWE-1236).
 """
 
 import csv
@@ -49,11 +49,18 @@ _XML_ILLEGAL_RE = re.compile(
     ILLEGAL_CHARACTERS_RE.pattern + r"|[\ufffe\uffff]"
 )
 
+#: The XML-illegal control characters Python reads as whitespace (VT,
+#: FF and the separators FS-US): the matcher splits words on them, so
+#: they export as a space rather than gluing two words together.
+_XML_ILLEGAL_WHITESPACE_RE = re.compile(r"[\x0b\x0c\x1c-\x1f]")
+
 
 def _sanitize(value: object) -> str:
     """Stringify a value, XML-safe and with formulas neutralised."""
     text = "" if value is None else str(value)
-    # Dropped first, so no formula can hide behind a control character.
+    # Replaced or dropped first, so no formula can hide behind a
+    # control character.
+    text = _XML_ILLEGAL_WHITESPACE_RE.sub(" ", text)
     text = _XML_ILLEGAL_RE.sub("", text)
     if text and text[0] in _FORMULA_TRIGGERS:
         return "'" + text

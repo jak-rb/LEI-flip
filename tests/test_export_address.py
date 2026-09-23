@@ -44,6 +44,10 @@ XML_ILLEGAL = [
     chr(code) for code in range(0x20) if chr(code) not in "\t\n\r"
 ] + ["\ufffe", "\uffff"]
 
+#: The ones the exports drop. The rest (VT, FF, FS-US) read as
+#: whitespace and export as a space (tests/test_misc_fixes.py).
+XML_ILLEGAL_DROPPED = [char for char in XML_ILLEGAL if not char.isspace()]
+
 
 class _FakeGleifClient:
     def __enter__(self):
@@ -117,7 +121,8 @@ def _exported_rows(client, job_id):
 
 
 @pytest.mark.parametrize(
-    "char", XML_ILLEGAL, ids=[f"U+{ord(c):04X}" for c in XML_ILLEGAL],
+    "char", XML_ILLEGAL_DROPPED,
+    ids=[f"U+{ord(c):04X}" for c in XML_ILLEGAL_DROPPED],
 )
 def test_exports_drop_xml_illegal_characters(client, char):
     # Reachable from the single form, any upload, and GLEIF's own
@@ -150,7 +155,8 @@ def test_exports_drop_xml_illegal_characters(client, char):
 
 
 @pytest.mark.parametrize(
-    "char", XML_ILLEGAL, ids=[f"U+{ord(c):04X}" for c in XML_ILLEGAL],
+    "char", XML_ILLEGAL_DROPPED,
+    ids=[f"U+{ord(c):04X}" for c in XML_ILLEGAL_DROPPED],
 )
 def test_exports_drop_xml_illegal_characters_of_a_candidate(client, char):
     # A near-miss exports the lookup's notes; once the user confirms the
