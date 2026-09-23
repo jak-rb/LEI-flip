@@ -57,7 +57,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 # Allowed bulk-upload extensions. The browser checks this too, but a
 # request can reach the server without going through our JavaScript,
 # so the server must enforce the rule itself.
-ALLOWED_UPLOAD_EXTENSIONS = (".xlsx", ".csv")
+ALLOWED_UPLOAD_EXTENSIONS = (".xlsx", ".csv", ".tsv", ".txt")
 
 #: How many entities one /run call looks up at most, and the wall-clock
 #: budget after which a call stops early and returns partial progress.
@@ -206,14 +206,15 @@ def _bulk_entities() -> list[InputEntity]:
     filename = (upload.filename or "") if upload else ""
     if not filename:
         raise InputError(
-            "Please attach a .xlsx or .csv file.",
-            "Přiložte prosím soubor .xlsx nebo .csv.",
+            "Please attach a .xlsx, .csv, .tsv or .txt file.",
+            "Přiložte prosím soubor .xlsx, .csv, .tsv nebo .txt.",
         )
     if not filename.lower().endswith(ALLOWED_UPLOAD_EXTENSIONS):
         raise InputError(
-            "Unsupported file type. Please upload a .xlsx or .csv file.",
-            "Nepodporovaný typ souboru. Nahrajte prosím soubor .xlsx "
-            "nebo .csv.",
+            "Unsupported file type. Please upload a .xlsx, .csv, .tsv or "
+            ".txt file.",
+            "Nepodporovaný typ souboru. Nahrajte prosím soubor .xlsx, "
+            ".csv, .tsv nebo .txt.",
         )
     return parse_upload(filename, upload.read())
 

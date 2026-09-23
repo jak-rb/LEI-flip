@@ -7,6 +7,7 @@ anything else -> no match.
 """
 
 import io
+import zipfile
 
 import pytest
 from openpyxl import Workbook
@@ -189,7 +190,7 @@ def test_bulk_flow_runs_in_chunks_and_records_decisions(
 def test_bulk_rejects_wrong_extension_and_empty_file(client):
     wrong = client.post(
         "/api/jobs",
-        data={"mode": "bulk", "file_upload": (io.BytesIO(b"x"), "in.txt")},
+        data={"mode": "bulk", "file_upload": (io.BytesIO(b"x"), "in.xls")},
         content_type="multipart/form-data",
     )
     assert wrong.status_code == 400
@@ -227,8 +228,41 @@ def test_bulk_reads_utf16_and_cr_files_and_refuses_unreadable(client):
         refused = _create_bulk(client, content)
         assert refused.status_code == 400
         body = refused.get_json()
-        assert "Could not read the .csv file" in body["error"]
-        assert "Soubor .csv se nepodařilo přečíst" in body["error_cs"]
+        assert "Could not read the file" in body["error"]
+        assert "Soubor se nepodařilo přečíst" in body["error_cs"]
+
+
+def test_bulk_reads_tab_separated_files(client):
+    rows = [
+        ["Název", "ISIN", "Země"],
+        ["ČEZ, a. s.", "CZ0005112300", "CZ"],
+        ["Komerční banka, a.s.", "", "CZ"],
+    ]
+    tsv = "\r\n".join("\t".join(row) for row in rows) + "\r\n"
+    # Excel's "Unicode Text" export is a UTF-16 .txt; a .tsv, or a .csv
+    # holding tabs, is usually UTF-8. The commas in the names must not
+    # split them.
+    for content, filename in (
+        (tsv.encode("utf-16"), "in.txt"),
+        (tsv.encode(), "in.tsv"),
+        (tsv.encode(), "in.csv"),
+    ):
+        created = _create_bulk(client, content, filename)
+        assert created.status_code == 200, (filename, created.get_json())
+        query = storage.get_search(created.get_json()["job_id"])["query"]
+        assert [entity["name"] for entity in query] == [
+            "ČEZ, a. s.", "Komerční banka, a.s.",
+        ]
+        assert query[0]["isin"] == "CZ0005112300"
+
+    # A .txt is always tab-separated, so a plain list of names, one per
+    # line, keeps the commas inside them.
+    names = "ČEZ, a. s.\nŠkoda Auto a.s.\n".encode()
+    created = _create_bulk(client, names, "names.txt")
+    query = storage.get_search(created.get_json()["job_id"])["query"]
+    assert [entity["name"] for entity in query] == [
+        "ČEZ, a. s.", "Škoda Auto a.s.",
+    ]
 
 
 def test_bulk_xlsx_saved_on_a_chart_sheet_reads_its_worksheet(client):
@@ -248,6 +282,37 @@ def test_bulk_xlsx_saved_on_a_chart_sheet_reads_its_worksheet(client):
     created = _create_bulk(client, content.getvalue(), "in.xlsx")
     assert created.status_code == 200, created.get_json()
     assert created.get_json()["total"] == 1
+
+
+def test_bulk_refuses_damaged_or_chart_only_xlsx(client):
+    # A sheet cut off halfway only fails once its rows are read, and a
+    # workbook of charts alone has no worksheet: both used to be a 500.
+    workbook = Workbook()
+    for index in range(50):
+        workbook.active.append([f"Company {index} a.s.", None, "CZ"])
+    whole = io.BytesIO()
+    workbook.save(whole)
+    damaged = io.BytesIO()
+    with zipfile.ZipFile(whole) as source, \
+            zipfile.ZipFile(damaged, "w") as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                data = data[: len(data) // 2]
+            target.writestr(item, data)
+
+    charts_only = Workbook()
+    charts_only.remove(charts_only.active)
+    charts_only.create_chartsheet("Chart").add_chart(BarChart())
+    charts = io.BytesIO()
+    charts_only.save(charts)
+
+    for content in (damaged.getvalue(), charts.getvalue()):
+        refused = _create_bulk(client, content, "in.xlsx")
+        assert refused.status_code == 400
+        body = refused.get_json()
+        assert "Could not read the .xlsx file" in body["error"]
+        assert "Soubor .xlsx se nepodařilo přečíst" in body["error_cs"]
 
 
 def test_gleif_outage_keeps_progress_and_resumes(client, monkeypatch):

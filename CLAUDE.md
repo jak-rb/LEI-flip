@@ -105,8 +105,8 @@ structure, conventions, current state, …) after it.
 LEI lookup is a small web tool for finding a company's Legal Entity Identifier
 (LEI) in the [GLEIF](https://www.gleif.org/) database. A user can either run a
 single lookup (enter an entity name or an ISIN, optionally with address fields
-to narrow the result) or a bulk lookup by uploading an `.xlsx` or `.csv` file
-of entities.
+to narrow the result) or a bulk lookup by uploading an `.xlsx`, `.csv`, `.tsv`
+or `.txt` file of entities.
 
 It is a lean rebuild based on the core of the original LEI lookup tool created
 by Jakub Schrimpel: the precision-first matcher and GLEIF/ISIN resolution are
@@ -169,7 +169,7 @@ core/              # backend lookup logic (ported + simplified from the original
   openfigi.py      # OpenFIGI client: ISIN -> issuer name(s) (ISIN fallback)
   storage.py       # search store: one `searches` table on Postgres or SQLite
   export.py        # build CSV / Excel from a search (reflects manual decisions)
-  upload.py        # parse an uploaded .xlsx/.csv into entities (bulk)
+  upload.py        # parse an uploaded .xlsx/.csv/.tsv/.txt into entities
 data/              # read-only lookup tables (committed)
   country_mapping.json  # country name (cs/en) -> ISO alpha-2 code
   legal_forms.txt       # legal-form suffixes stripped before name matching
@@ -198,8 +198,9 @@ with a hard time limit (300 s on Hobby) and no long-lived process, so the old
 single streaming request that looked up a whole bulk file is gone. Instead:
 
 1. `POST /api/jobs` validates the input (single form fields, or an uploaded
-   `.xlsx`/`.csv` parsed by `core/upload.py` - positional columns, 100-entity
-   cap) and stores the entities to look up under a new `job_id` via
+   `.xlsx`/`.csv`/`.tsv`/`.txt` parsed by `core/upload.py` - positional
+   columns, 100-entity cap; a `.csv` detects comma, semicolon or tab, a
+   `.tsv`/`.txt` is always tab-separated) and stores the entities to look up under a new `job_id` via
    `core/storage.create_search`. Nothing is looked up yet. Unusable input
    returns 400 with an `error` message the search page shows next to its
    Search button (this replaced the separate pre-flight endpoint).

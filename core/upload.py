@@ -1,10 +1,10 @@
 
-"""Parse an uploaded .xlsx/.csv file into a list of InputEntity objects.
+"""Parse an uploaded .xlsx, .csv, .tsv or .txt file into entities.
 
 Columns are read by position, in the order the bulk form documents:
 Name, ISIN, Country, City, Street, Postal code. A first row that looks
 like a header is skipped. Uses openpyxl for .xlsx and the stdlib csv
-module for .csv, so no extra dependency is needed.
+module for the text formats, so no extra dependency is needed.
 """
 
 import codecs
@@ -33,12 +33,18 @@ _HEADER_CELLS = frozenset({
     "issuer", "issuer name", "firma", "nazev", "název",
 })
 
-#: Shown (English, Czech) for a .csv that cannot be read as text rows.
-_UNREADABLE_CSV = (
-    "Could not read the .csv file. Save it from Excel as CSV UTF-8, "
-    "or upload the .xlsx instead.",
-    "Soubor .csv se nepodařilo přečíst. Uložte ho z Excelu jako CSV "
-    "UTF-8 nebo nahrajte soubor .xlsx.",
+#: Text formats read with the csv module: extension -> delimiter, where
+#: None means detect it. Excel's "Text (Tab delimited)" and "Unicode
+#: Text" exports, and cells copied from Excel into a text editor, are
+#: tab-separated .txt; a .tsv is tab-separated by definition.
+_TEXT_DELIMITERS = {".csv": None, ".tsv": "\t", ".txt": "\t"}
+
+#: Shown (English, Czech) for a text file that cannot be read as rows.
+_UNREADABLE_TEXT = (
+    "Could not read the file. Save it from Excel as CSV UTF-8, or "
+    "upload the .xlsx instead.",
+    "Soubor se nepodařilo přečíst. Uložte ho z Excelu jako CSV UTF-8 "
+    "nebo nahrajte soubor .xlsx.",
 )
 
 
@@ -62,13 +68,14 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
     ext = Path(filename).suffix.lower()
     if ext == ".xlsx":
         rows = _read_xlsx(content)
-    elif ext == ".csv":
-        rows = _read_csv(content)
+    elif ext in _TEXT_DELIMITERS:
+        rows = _read_csv(content, _TEXT_DELIMITERS[ext])
     else:
         raise InputError(
-            "Unsupported file type. Please upload a .xlsx or .csv file.",
-            "Nepodporovaný typ souboru. Nahrajte prosím soubor .xlsx "
-            "nebo .csv.",
+            "Unsupported file type. Please upload a .xlsx, .csv, .tsv or "
+            ".txt file.",
+            "Nepodporovaný typ souboru. Nahrajte prosím soubor .xlsx, "
+            ".csv, .tsv nebo .txt.",
         )
 
     rows = _drop_header(rows)
@@ -92,10 +99,23 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
 
 def _read_xlsx(content: bytes) -> list[list[str]]:
     """Read the active worksheet into rows of trimmed string cells."""
+    # The whole read sits in the try: in read-only mode a damaged sheet
+    # only fails once its rows are read.
     try:
         workbook = load_workbook(
             io.BytesIO(content), read_only=True, data_only=True
         )
+        sheet = workbook.active
+        # Excel saves the sheet on screen as the active one; a chart
+        # sheet has no cells, so fall back to the first worksheet.
+        if isinstance(sheet, Chartsheet):
+            sheet = workbook.worksheets[0]
+        rows = []
+        for raw in sheet.iter_rows(values_only=True):
+            rows.append(
+                ["" if cell is None else str(cell).strip() for cell in raw]
+            )
+        workbook.close()
     except Exception as error:
         logger.warning("Failed to parse uploaded .xlsx file: %s", error)
         raise InputError(
@@ -103,18 +123,6 @@ def _read_xlsx(content: bytes) -> list[list[str]]:
             "Soubor .xlsx se nepodařilo přečíst. Je to platný soubor "
             "Excelu?",
         ) from error
-
-    sheet = workbook.active
-    # Excel saves the sheet on screen as the active one; a chart sheet
-    # has no cells, so fall back to the first worksheet.
-    if isinstance(sheet, Chartsheet):
-        sheet = workbook.worksheets[0]
-    rows = []
-    for raw in sheet.iter_rows(values_only=True):
-        rows.append(
-            ["" if cell is None else str(cell).strip() for cell in raw]
-        )
-    workbook.close()
     return rows
 
 
@@ -133,24 +141,29 @@ def _decode(content: bytes) -> str:
     return content.decode("latin-1")  # latin-1 never fails
 
 
-def _read_csv(content: bytes) -> list[list[str]]:
-    """Read CSV bytes into rows, auto-detecting comma vs semicolon."""
+def _read_csv(content: bytes, delimiter: str | None) -> list[list[str]]:
+    """Read delimited text into rows; a None delimiter is detected.
+
+    Detection picks whichever of comma, semicolon and tab is most common
+    in the first lines; a tie keeps the comma, then the semicolon.
+    """
     text = _decode(content)
     # Text never holds a NUL: this is binary content, such as an Excel
     # workbook renamed to .csv, which would only parse into garbage.
     if "\x00" in text:
-        logger.warning("Uploaded .csv file is binary (contains NUL)")
-        raise InputError(*_UNREADABLE_CSV)
-    sample = "\n".join(text.splitlines()[:5])
-    delimiter = ";" if sample.count(";") > sample.count(",") else ","
+        logger.warning("Uploaded text file is binary (contains NUL)")
+        raise InputError(*_UNREADABLE_TEXT)
+    if delimiter is None:
+        sample = "\n".join(text.splitlines()[:5])
+        delimiter = max((",", ";", "\t"), key=sample.count)
     # newline="" leaves line endings to the csv module, which accepts
     # \n, \r\n and the lone \r of old Mac files alike.
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
     try:
         return [[cell.strip() for cell in row] for row in reader]
     except csv.Error as error:  # e.g. a cell over the 128 KB limit
-        logger.warning("Failed to parse uploaded .csv file: %s", error)
-        raise InputError(*_UNREADABLE_CSV) from error
+        logger.warning("Failed to parse uploaded text file: %s", error)
+        raise InputError(*_UNREADABLE_TEXT) from error
 
 
 def _drop_header(rows: list[list[str]]) -> list[list[str]]:

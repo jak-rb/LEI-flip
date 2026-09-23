@@ -13,7 +13,7 @@ const LANG_KEY = "leiLang";
 const STRINGS = {
     en: {
         needNameOrIsin: "Please enter an entity name or an ISIN",
-        selectFile: "Please select a .xlsx or .csv file",
+        selectFile: "Please select a .xlsx, .csv, .tsv or .txt file",
         selectFileFirst: "Please select a file first",
         tooLarge: "That file is too large. The maximum upload size is 4 MB.",
         couldNotStart: "The search could not be started. Please try again.",
@@ -29,7 +29,7 @@ const STRINGS = {
     },
     cs: {
         needNameOrIsin: "Zadejte název subjektu nebo ISIN",
-        selectFile: "Vyberte soubor .xlsx nebo .csv",
+        selectFile: "Vyberte soubor .xlsx, .csv, .tsv nebo .txt",
         selectFileFirst: "Nejprve vyberte soubor",
         tooLarge: "Soubor je příliš velký. Maximální velikost je 4 MB.",
         couldNotStart: "Vyhledávání se nepodařilo spustit. Zkuste to prosím znovu.",
@@ -295,10 +295,11 @@ function setupBulkForm() {
     const fileItems = form.querySelector(".file-list-items");
     const dropzone = form.querySelector(".dropzone");
 
-    // Only .xlsx and .csv are accepted. The input's "accept" attribute is just
-    // a picker hint, and drag-and-drop ignores it, so check the name ourselves.
+    // Only .xlsx, .csv, .tsv and .txt are accepted. The input's "accept"
+    // attribute is just a picker hint, and drag-and-drop ignores it, so check
+    // the name ourselves.
     function isAllowedFile(file) {
-        return /\.(xlsx|csv)$/i.test(file.name);
+        return /\.(xlsx|csv|tsv|txt)$/i.test(file.name);
     }
 
     // Draw the file-list box for the current selection: a "n/1" counter on the
