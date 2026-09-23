@@ -300,7 +300,7 @@ def _openfigi_fallback(
     Returns:
         A positive LookupResult, or None if nothing corroborated.
     """
-    for figi_name in resolve_isin_to_names(isin):
+    for figi_name in resolve_isin_to_names(isin, deadline=client.deadline):
         logger.info(
             "OpenFIGI resolved ISIN %s -> %r; re-searching GLEIF",
             isin, figi_name,

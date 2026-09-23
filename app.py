@@ -11,6 +11,7 @@ and a page refresh mid-search resumes where it left off.
 """
 
 import logging
+import math
 import secrets
 import time
 
@@ -26,9 +27,16 @@ from flask import (
 from pydantic import ValidationError
 
 from core import export, storage
-from core.gleif import GleifApiError, GleifClient
+from core.gleif import (
+    DeadlineExceeded,
+    GleifApiError,
+    GleifClient,
+    GleifQueryError,
+    GleifRateLimited,
+    GleifServerError,
+)
 from core.lookup import lookup_entity
-from core.models import InputEntity, InputError
+from core.models import InputEntity, InputError, LookupResult
 from core.upload import parse_upload
 
 logging.basicConfig(
@@ -61,14 +69,40 @@ ALLOWED_UPLOAD_EXTENSIONS = (".xlsx", ".csv", ".tsv", ".txt")
 
 #: How many entities one /run call looks up at most, and the wall-clock
 #: budget after which a call stops early and returns partial progress.
-#: One lookup is a handful of GLEIF requests (more with retries or the
-#: OpenFIGI fallback), so together these keep every call well under
-#: the function's time limit.
+#: The budget is also the GLEIF client's deadline: no request or retry
+#: starts after it and each request's timeout is cut to fit it, so a
+#: call ends within about the budget even when GLEIF is slow, far
+#: under the function's time limit.
 RUN_CHUNK_SIZE = 5
 RUN_TIME_BUDGET_SECONDS = 40
 
+#: How many /run calls may fail on the same entity - GLEIF answering
+#: its lookup with server errors, or the lookup not fitting even into a
+#: call of its own - before it is stored as a failed lookup, so that
+#: one bad entity cannot stall the job for ever.
+RUN_MAX_ATTEMPTS = 3
+
 GLEIF_DOWN_MESSAGE = "GLEIF service is unavailable. Please try again later."
 GLEIF_DOWN_MESSAGE_CS = "Služba GLEIF je nedostupná. Zkuste to prosím později."
+
+# Notes of an entity stored as a failed lookup (the no-match table and
+# the downloads show them, like the notes core/lookup.py writes).
+LOOKUP_ERROR_NOTE = (
+    "Lookup failed because of an internal error - LEI not assigned. "
+    "Please search this entity again."
+)
+GLEIF_REFUSED_NOTE = (
+    "Lookup failed: GLEIF refused the query - LEI not assigned. Please "
+    "check the entered values."
+)
+GLEIF_ERRORS_NOTE = (
+    "Lookup failed: GLEIF kept answering with an error - LEI not "
+    "assigned. Please search this entity again later."
+)
+GLEIF_TOO_SLOW_NOTE = (
+    "Lookup failed: GLEIF did not answer in time - LEI not assigned. "
+    "Please search this entity again later."
+)
 
 
 @app.route("/health")
@@ -249,6 +283,81 @@ def create_job():
     return {"job_id": job_id, "total": len(entities)}
 
 
+def _failed_row(entity: InputEntity, note: str) -> dict:
+    """The stored row of an entity whose lookup failed: a NO_MATCH."""
+    return _result_row(entity, LookupResult(notes=note), [])
+
+
+def _gave_up(job_id: str, index: int) -> bool:
+    """Count a failed attempt at an entity; True once none are left."""
+    failures = storage.record_failed_attempt(job_id, index)
+    return failures is not None and failures >= RUN_MAX_ATTEMPTS
+
+
+def _lookup_row(
+    job_id: str,
+    index: int,
+    entity: InputEntity,
+    client: GleifClient,
+    alone: bool,
+) -> dict:
+    """Look up one entity of a job and build its stored result row.
+
+    A lookup that failed for good becomes a NO_MATCH row whose note
+    says so: an unexpected error, a query GLEIF refuses, or - once
+    RUN_MAX_ATTEMPTS calls have failed on the entity - GLEIF server
+    errors or a lookup too slow for a call of its own. Whatever is
+    worth retrying later is raised instead.
+
+    Args:
+        job_id: The job's id.
+        index: The entity's position in the job's query.
+        entity: The entity to look up.
+        client: The call's open GLEIF client.
+        alone: Whether the lookup has the call's whole time budget (it
+            is the first of the call).
+
+    Returns:
+        The entity's result row.
+
+    Raises:
+        DeadlineExceeded: If the call's deadline cut the lookup off.
+        GleifApiError: If GLEIF is unavailable or rate-limiting.
+    """
+    try:
+        result, closest = lookup_entity(entity, client)
+    except GleifQueryError as exc:
+        logger.warning(
+            "GLEIF refused entity %d of job %s: %s", index, job_id, exc
+        )
+        return _failed_row(entity, GLEIF_REFUSED_NOTE)
+    except GleifServerError:
+        if not _gave_up(job_id, index):
+            raise
+        logger.exception("Giving up on entity %d of job %s", index, job_id)
+        return _failed_row(entity, GLEIF_ERRORS_NOTE)
+    except DeadlineExceeded:
+        # Cut off, not failed: the next call looks it up afresh. Only
+        # a lookup that had a whole call to itself counts as failing,
+        # as trying that again cannot go better.
+        if not alone or not _gave_up(job_id, index):
+            raise
+        logger.warning(
+            "Giving up on entity %d of job %s: too slow", index, job_id
+        )
+        return _failed_row(entity, GLEIF_TOO_SLOW_NOTE)
+    except GleifApiError:
+        raise
+    except Exception:
+        # A bug or a reply of a shape nobody expected: retrying the
+        # entity would only fail the same way again.
+        logger.exception(
+            "Lookup failed for entity %d of job %s", index, job_id
+        )
+        return _failed_row(entity, LOOKUP_ERROR_NOTE)
+    return _result_row(entity, result, closest)
+
+
 @app.route("/api/jobs/<job_id>/run", methods=["POST"])
 def run_job(job_id: str):
     """Look up the next few pending entities of a job and save them.
@@ -256,10 +365,16 @@ def run_job(job_id: str):
     Returns the job's progress (see ``_progress``); the browser keeps
     calling until ``done`` is true. A GLEIF outage saves whatever
     completed and answers 503 with an ``error`` message (and its Czech
-    ``error_cs``), so a later call resumes from there. Two calls racing
-    on one job (a second tab, or a refresh while the previous call is
-    still running) cannot store an entity twice: the store only accepts
-    rows that continue from the result count this call started at.
+    ``error_cs``), so a later call resumes from there. When GLEIF
+    rate-limits for longer than the call has left, the reply is the
+    progress plus ``throttled`` and ``retry_after`` (the seconds to
+    wait before the next call). A lookup cut off by the time budget is
+    not stored and the next call starts it again, while one that failed
+    for good is stored as a failed lookup (see ``_lookup_row``), so
+    the job can always finish. Two calls racing on one job (a second
+    tab, or a refresh while the previous call is still running) cannot
+    store an entity twice: the store only accepts rows that continue
+    from the result count this call started at.
     """
     search = storage.get_search(job_id)
     if search is None:
@@ -269,18 +384,28 @@ def run_job(job_id: str):
     pending = search["query"][offset:]
     rows = []
     gleif_down = False
+    retry_after = None
     started = time.monotonic()
-    try:
-        with GleifClient() as client:
-            for record in pending[:RUN_CHUNK_SIZE]:
-                entity = _entity_from_input(record)
-                result, closest = lookup_entity(entity, client)
-                rows.append(_result_row(entity, result, closest))
-                if time.monotonic() - started > RUN_TIME_BUDGET_SECONDS:
-                    break
-    except GleifApiError as exc:
-        logger.exception("GLEIF lookup failed: %s", exc)
-        gleif_down = True
+    with GleifClient() as client:
+        client.deadline = started + RUN_TIME_BUDGET_SECONDS
+        for index, record in enumerate(pending[:RUN_CHUNK_SIZE], offset):
+            entity = _entity_from_input(record)
+            try:
+                rows.append(
+                    _lookup_row(job_id, index, entity, client, alone=not rows)
+                )
+            except DeadlineExceeded:
+                break
+            except GleifRateLimited as exc:
+                logger.warning("GLEIF lookup paused: %s", exc)
+                retry_after = exc.retry_after
+                break
+            except GleifApiError as exc:
+                logger.exception("GLEIF lookup failed: %s", exc)
+                gleif_down = True
+                break
+            if time.monotonic() - started > RUN_TIME_BUDGET_SECONDS:
+                break
 
     if rows:
         # None: a rival call stored these entities first (or the job
@@ -297,6 +422,12 @@ def run_job(job_id: str):
             "error_cs": GLEIF_DOWN_MESSAGE_CS,
             **progress,
         }, 503
+    if retry_after is not None:
+        return {
+            **progress,
+            "throttled": True,
+            "retry_after": math.ceil(retry_after),
+        }
     return progress
 
 

@@ -290,3 +290,43 @@ def record_decision(
         )
     return decision
 
+
+def record_failed_attempt(job_id: str, index: int) -> Optional[int]:
+    """Count one more failed lookup attempt for one entity of a search.
+
+    The count is kept on the entity's own record in the stored query,
+    as ``failed_attempts``, so it needs no schema change. The write is
+    a compare-and-swap on the stored query text, so it is atomic on
+    both backends: when a racing request changed the query since it
+    was read, this attempt is not counted rather than written over
+    the rival's newer count.
+
+    Args:
+        job_id: The search's id.
+        index: Position of the entity in the search's query.
+
+    Returns:
+        The entity's failed attempts so far, this one included, or None
+        if the job is missing, the index is out of range, or a racing
+        request's count won.
+    """
+    with _connect() as conn:
+        data = conn.fetchone(
+            "SELECT query FROM searches WHERE job_id = %s", (job_id,)
+        )
+        if data is None:
+            return None
+        query = json.loads(data["query"]) if data["query"] else []
+        if not 0 <= index < len(query):
+            return None
+        count = query[index].get("failed_attempts", 0) + 1
+        query[index]["failed_attempts"] = count
+        cursor = conn.execute(
+            "UPDATE searches SET query = %s WHERE job_id = %s AND query = %s",
+            (json.dumps(query), job_id, data["query"]),
+        )
+        if cursor.rowcount != 1:
+            return None
+    return count
+
+
