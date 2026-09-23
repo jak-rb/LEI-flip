@@ -17,6 +17,7 @@ style) that the SQLite path rewrites to ``?``.
 
 import json
 import os
+import re
 import sqlite3
 import tempfile
 from contextlib import contextmanager
@@ -32,6 +33,17 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get(
 
 #: Per-search rows older than this are deleted on the next write.
 SEARCH_RETENTION_DAYS = 30
+
+#: A job id as ``app.create_job`` mints it (``secrets.token_hex(16)``).
+#: Any other id is refused before it reaches the database: psycopg
+#: raises on a NUL in a text parameter, which made such ids a 500.
+_JOB_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
+
+#: How many times a decision reads the search and tries to write it
+#: back. A try fails only when a rival write to that search landed
+#: between the read and the write, so this is far beyond what one
+#: user's tabs can produce.
+_DECISION_ATTEMPTS = 50
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS searches (
@@ -149,6 +161,13 @@ def _prune_searches(conn: _Connection) -> None:
     conn.execute("DELETE FROM searches WHERE created_at < %s", (cutoff,))
 
 
+def _is_job_id(job_id) -> bool:
+    """Whether ``job_id`` is a str in the minted job id format."""
+    return isinstance(job_id, str) and bool(
+        _JOB_ID_PATTERN.fullmatch(job_id)
+    )
+
+
 def create_search(job_id: str, mode: str, query: list) -> None:
     """Create a search: its entities to look up, with no results yet.
 
@@ -187,10 +206,15 @@ def append_results(
         the job is missing or expired - or if the stored results have
         already moved past ``offset``: another request (a second tab,
         or a refresh mid-search) looked up the same entities first, so
-        these rows are dropped instead of being stored twice.
+        these rows are dropped instead of being stored twice. Also
+        None if the rows would run past the job's entities.
     """
     search = get_search(job_id)
     if search is None or len(search["results"]) != offset:
+        return None
+    # Never past the query: decisions are only taken once every entity
+    # has its row, so no append can land after one and wipe it.
+    if offset + len(rows) > len(search["query"]):
         return None
     results = search["results"] + rows
     found = sum(1 for row in results if (row.get("match") or {}).get("lei"))
@@ -216,9 +240,12 @@ def get_search(job_id: str) -> Optional[dict]:
 
     Returns:
         A dict of the summary columns plus ``query`` and ``results``
-        (each JSON decoded back into a list), or None if no such row
-        exists.
+        (each JSON decoded back into a list), or None if the id is not
+        in the minted format (the database is not queried then) or no
+        such row exists.
     """
+    if not _is_job_id(job_id):
+        return None
     with _connect() as conn:
         data = conn.fetchone(
             "SELECT job_id, created_at, mode, searched, found, "
@@ -254,7 +281,14 @@ def record_decision(
     The candidates are already stored with the search, so a decision
     only records which one the user confirmed - no candidate data is
     duplicated. The stored search is updated in place so the detail page
-    and the downloads reflect the choice.
+    and the downloads reflect the choice. Only a finished search takes
+    decisions, and only on a row the detail page offers for validation.
+
+    The write is a compare-and-swap: it lands only while the stored
+    results are still exactly the text this call read; otherwise the
+    call reads again and retries. A decision therefore never overwrites
+    a rival decision on another row, or rows a /run appended, with its
+    older copy of the results.
 
     Args:
         job_id: The search's id.
@@ -262,31 +296,57 @@ def record_decision(
         choice: A candidate's LEI to confirm, or "none" for no match.
 
     Returns:
-        The saved decision dict, or None if the job is missing, the
-        index is out of range, or the LEI is not one of that entity's
-        stored candidates.
+        The saved decision dict, or None if the job is missing or still
+        running, the index is out of range, the row has nothing to
+        validate, the LEI is not one of that entity's stored
+        candidates, or rival writes won every attempt.
     """
-    search = get_search(job_id)
-    if search is None:
+    if not _is_job_id(job_id) or not isinstance(index, int):
         return None
-    results = search["results"]
-    if not isinstance(index, int) or not (0 <= index < len(results)):
-        return None
+    with _connect() as conn:
+        for _ in range(_DECISION_ATTEMPTS):
+            stored = conn.fetchone(
+                "SELECT query, results FROM searches WHERE job_id = %s",
+                (job_id,),
+            )
+            if stored is None:
+                return None
+            query = json.loads(stored["query"]) if stored["query"] else []
+            results = json.loads(stored["results"])
+            decision = _apply_decision(query, results, index, choice)
+            if decision is None:
+                return None
+            cursor = conn.execute(
+                "UPDATE searches SET results = %s "
+                "WHERE job_id = %s AND results = %s",
+                (json.dumps(results), job_id, stored["results"]),
+            )
+            if cursor.rowcount == 1:
+                return decision
+            # A rival write landed since the read: end this transaction
+            # so the next read sees it.
+            conn.commit()
+    return None
 
+
+def _apply_decision(
+    query: list, results: list, index: int, choice: Optional[str]
+) -> Optional[dict]:
+    """Set the choice on ``results[index]``; None if not allowed."""
+    if len(results) < len(query) or not (0 <= index < len(results)):
+        return None
     row = results[index]
+    # The detail page's to-validate test (app._partition): candidates,
+    # but no algorithmic match.
+    if (row.get("match") or {}).get("lei") or not row.get("closest"):
+        return None
     if choice == "none":
         decision = {"status": "none"}
     else:
-        candidate_leis = {c.get("lei") for c in row.get("closest", [])}
+        candidate_leis = {c.get("lei") for c in row["closest"]}
         if choice not in candidate_leis:
             return None
         decision = {"status": "confirmed", "lei": choice}
-
     row["decision"] = decision
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE searches SET results = %s WHERE job_id = %s",
-            (json.dumps(results), job_id),
-        )
     return decision
 

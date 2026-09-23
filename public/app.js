@@ -603,9 +603,18 @@ function setupValidation() {
         }
     }
 
+    // Every record's decision buttons, disabled while a save is pending
+    // so a second choice cannot race the first one.
+    const decisionBtns = Array.from(
+        section.querySelectorAll(".candidate-confirm, .validate-none"),
+    );
+
     // Save a decision for a record, then advance to the next one.
     async function saveDecision(record, choice) {
         const index = Number(record.dataset.index);
+        decisionBtns.forEach((btn) => {
+            btn.disabled = true;
+        });
         try {
             const response = await fetch("/api/decision", {
                 method: "POST",
@@ -621,11 +630,17 @@ function setupValidation() {
                 data.decision.status === "confirmed" ? data.decision.lei : "";
             paintDecision(record);
             updateCounter();
-            if (current < records.length - 1) {
+            // Advance only from the saved record: if the arrows moved
+            // on while the save was pending, stay where the user went.
+            if (records[current] === record && current < records.length - 1) {
                 show(current + 1, "next");
             }
         } catch (error) {
             // Network hiccup: leave the record unchanged so it can retry.
+        } finally {
+            decisionBtns.forEach((btn) => {
+                btn.disabled = false;
+            });
         }
     }
 
