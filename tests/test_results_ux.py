@@ -376,6 +376,36 @@ def test_you_searched_shows_only_the_given_place_parts(client):
     ]
 
 
+@pytest.mark.parametrize(
+    ("country", "city", "expected"),
+    [
+        ("   ", "Praha", "You searched: Review Single (Praha)"),
+        ("CZ", "  ", "You searched: Review Single (CZ)"),
+        (" ", " ", "You searched: Review Single"),
+        (" CZ ", " Praha ", "You searched: Review Single (CZ, Praha)"),
+    ],
+)
+def test_you_searched_skips_blank_place_parts_of_the_form(
+    client, country, city, expected,
+):
+    # The single form stores country and city as typed, so a part
+    # made only of spaces must count as not given.
+    created = client.post("/api/jobs", data={
+        "mode": "single", "entity_name": "Review Single",
+        "country": country, "city": city,
+    })
+    assert created.status_code == 200, created.get_json()
+    job_id = created.get_json()["job_id"]
+    while not client.post(f"/api/jobs/{job_id}/run").get_json()["done"]:
+        pass
+
+    block = re.search(
+        r'<p class="detail-searched">(.*?)</p>', _page(client, job_id),
+        re.DOTALL,
+    ).group(1)
+    assert " ".join(re.sub(r"<[^>]+>", " ", block).split()) == expected
+
+
 def _card_counts(page):
     """The Matched / Need validation / Unmatched numbers on the card."""
     return {

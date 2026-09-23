@@ -118,7 +118,9 @@
             <p class="detail-searched">
                 <span data-cs="Hledali jste:" data-en="You searched:">You searched:</span>
                 <strong>{{ rec.input.name or rec.input.isin }}</strong>
-                {% set place = [rec.input.country, rec.input.city]|select|join(', ') %}
+                {% set place = [rec.input.country or '',
+                                rec.input.city or '']
+                               |map('trim')|select|join(', ') %}
                 {% if place %}({{ place }}){% endif %}
             </p>
 
