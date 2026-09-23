@@ -497,6 +497,42 @@ def test_lookup_whose_deadline_went_on_a_rate_limit_is_not_too_slow(
     assert not _notes(job_id)[0].startswith("Lookup failed")
 
 
+@pytest.mark.parametrize("retry_after", ["45", "59"])
+def test_lookup_a_rate_limit_pushed_past_the_deadline_is_not_too_slow(
+    client, session, clock, monkeypatch, retry_after,
+):
+    # The lookup makes 20 requests of 4 s each: 80 s, well inside a
+    # call's 120. A rate limit of under a minute (GLEIF counts
+    # requests per minute) at each call's first request pushes it
+    # past the deadline, and that is the rate limit's doing.
+    monkeypatch.setattr(openfigi.requests, "post", _openfigi_two_names)
+    four_seconds = _answer_after(clock, 4)
+    state = {"first": True, "limiting": True}
+
+    def handler(params, timeout):
+        if state["limiting"] and state["first"]:
+            state["first"] = False
+            return _response(429, headers={"Retry-After": retry_after})
+        return four_seconds(params, timeout)
+    session.handler = handler
+    job_id = _create_job(client, [f"Alpha a.s.,{ISIN},CZ,Praha"])
+
+    for _ in range(app_module.RUN_MAX_ATTEMPTS + 2):
+        state["first"] = True
+        response = _run(client, job_id)
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["throttled"] is True
+        assert body["retry_after"] == int(retry_after)
+        assert (body["searched"], body["done"]) == (0, False)
+        assert _attempts(job_id) == [0]
+
+    state["limiting"] = False
+    body = _run(client, job_id).get_json()
+    assert (body["searched"], body["done"]) == (1, True)
+    assert not _notes(job_id)[0].startswith("Lookup failed")
+
+
 # ---- (e) a Retry-After date that overflows ----
 
 @pytest.mark.parametrize("header", OVERFLOWING_DATES)

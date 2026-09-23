@@ -404,8 +404,8 @@ def _lookup_row(
     Raises:
         DeadlineExceeded: If the call's deadline cut the lookup off.
         GleifApiError: If GLEIF is unavailable or rate-limiting; a
-            cut-off after waiting out rate limits for most of the
-            lookup's time is a GleifRateLimited too.
+            cut-off of a lookup that waiting out rate limits left
+            short of time is a GleifRateLimited too.
     """
     client.rate_limit_waits = []
     started = time.monotonic()
@@ -422,11 +422,15 @@ def _lookup_row(
         logger.exception("Giving up on entity %d of job %s", index, job_id)
         return _failed_row(entity, GLEIF_ERRORS_NOTE)
     except DeadlineExceeded as exc:
-        # Wherever the cut-off came (GLEIF or OpenFIGI), a lookup that
-        # spent most of its time waiting out rate limits was stopped
-        # by them, not by its own slowness: the call pauses.
+        # Every lookup has at least the time from the budget to the
+        # deadline, as none starts later. Wherever the cut-off came
+        # (GLEIF or OpenFIGI), a lookup whose rate-limit waits left it
+        # less than that of its own was stopped by them, not by its
+        # own slowness: the call pauses.
         waits = client.rate_limit_waits
-        if waits and 2 * sum(waits) >= time.monotonic() - started:
+        own_time = time.monotonic() - started - sum(waits)
+        least_time = RUN_DEADLINE_SECONDS - RUN_TIME_BUDGET_SECONDS
+        if waits and own_time < least_time:
             raise GleifRateLimited(waits[-1]) from exc
         # Cut off, not failed: the next call looks it up afresh. Only
         # a lookup that had the call's deadline to itself counts as
