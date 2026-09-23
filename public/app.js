@@ -630,7 +630,9 @@ function setupValidation() {
                 data.decision.status === "confirmed" ? data.decision.lei : "";
             paintDecision(record);
             updateCounter();
-            if (current < records.length - 1) {
+            // Advance only from the saved record: if the arrows moved
+            // on while the save was pending, stay where the user went.
+            if (records[current] === record && current < records.length - 1) {
                 show(current + 1, "next");
             }
         } catch (error) {

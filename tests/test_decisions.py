@@ -8,8 +8,12 @@ simultaneous decisions.
 """
 
 import io
+import json
 import secrets
+import shutil
+import subprocess
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -349,3 +353,166 @@ def test_decision_racing_run_cannot_shrink_the_results(monkeypatch):
     ) is not None
     assert len(storage.get_search(job_id)["results"]) == 10
 
+
+# The stepper tests drive public/app.js in Node against a tiny fake DOM
+# holding three records to validate, with a /api/decision reply that
+# lands only when the harness releases it.
+_APP_JS = Path(__file__).resolve().parent.parent / "public" / "app.js"
+_STEPPER_HARNESS = r"""
+"use strict";
+const fs = require("fs");
+const vm = require("vm");
+
+class ClassList {
+    constructor(names) { this.names = new Set(names); }
+    add(...names) { names.forEach((n) => this.names.add(n)); }
+    remove(...names) { names.forEach((n) => this.names.delete(n)); }
+    contains(name) { return this.names.has(name); }
+    toggle(name, force) {
+        const on = force === undefined ? !this.names.has(name) : !!force;
+        if (on) { this.names.add(name); } else { this.names.delete(name); }
+        return on;
+    }
+}
+
+class Element {
+    constructor(className, dataset = {}, children = []) {
+        this.classList = new ClassList(className.split(" "));
+        this.dataset = dataset;
+        this.children = children;
+        this.parent = null;
+        this.listeners = [];
+        this.disabled = false;
+        this.hidden = false;
+        this.textContent = "";
+        this.offsetWidth = 0;
+        children.forEach((child) => { child.parent = this; });
+    }
+    get nextElementSibling() {
+        const siblings = this.parent ? this.parent.children : [];
+        return siblings[siblings.indexOf(this) + 1] || null;
+    }
+    querySelectorAll(selector) {
+        const names = selector.split(",").map((s) => s.trim().slice(1));
+        const found = [];
+        const walk = (el) => el.children.forEach((child) => {
+            if (names.some((n) => child.classList.contains(n))) {
+                found.push(child);
+            }
+            walk(child);
+        });
+        walk(this);
+        return found;
+    }
+    querySelector(selector) {
+        return this.querySelectorAll(selector)[0] || null;
+    }
+    addEventListener(type, listener) { this.listeners.push(listener); }
+    setAttribute(name, value) { this[name] = value; }
+    // A disabled button ignores clicks, as in a browser.
+    click() {
+        if (!this.disabled) { this.listeners.forEach((fn) => fn({})); }
+    }
+}
+
+const records = [0, 1, 2].map((i) => new Element(
+    "validate-record", { index: String(i), decision: "", chosen: "" }, [
+        new Element("candidate-row", { lei: `LEI${i}` }, [
+            new Element("btn candidate-confirm"),
+        ]),
+        new Element("candidate-detail"),
+        new Element("btn validate-none"),
+    ],
+));
+const section = new Element("validation", { job: "a".repeat(32) }, [
+    new Element("validation-prev"),
+    new Element("validation-position"),
+    new Element("validation-next"),
+    ...records,
+]);
+const page = new Element("page", {}, [
+    new Element("validate-remaining"), section,
+]);
+const document = {
+    documentElement: { lang: "en", getAttribute: () => null },
+    querySelector: (selector) => page.querySelector(selector),
+    getElementById: () => null,
+    addEventListener() {},
+};
+
+const replies = [];
+function fetch(url, options) {
+    const choice = JSON.parse(options.body).choice;
+    return new Promise((resolve) => replies.push(() => resolve({
+        ok: true,
+        json: async () => ({ decision: { status: "confirmed", lei: choice } }),
+    })));
+}
+
+(async () => {
+    const context = vm.createContext({ document, fetch, console });
+    vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), context);
+    vm.runInContext("setupValidation()", context);
+    const shown = () => records.findIndex(
+        (record) => record.classList.contains("is-active"),
+    );
+    const buttons = section.querySelectorAll(
+        ".candidate-confirm, .validate-none",
+    );
+
+    records[0].querySelector(".candidate-confirm").click();
+    const disabledWhilePending = buttons.every((btn) => btn.disabled);
+    if (process.argv[3] === "press-next") {
+        section.querySelector(".validation-next").click();
+    }
+    const shownWhilePending = shown();
+    replies.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+    console.log(JSON.stringify({
+        disabledWhilePending,
+        shownWhilePending,
+        shownAfterSave: shown(),
+        enabledAfterSave: buttons.every((btn) => !btn.disabled),
+        savedDecision: records[0].dataset.decision,
+    }));
+})();
+"""
+
+
+def _run_stepper(tmp_path, *args):
+    """Run the stepper harness on public/app.js; return what it saw."""
+    harness = tmp_path / "stepper_harness.js"
+    harness.write_text(_STEPPER_HARNESS, encoding="utf-8")
+    finished = subprocess.run(
+        ["node", str(harness), str(_APP_JS), *args],
+        capture_output=True, text=True, timeout=60, check=True,
+    )
+    return json.loads(finished.stdout)
+
+
+_needs_node = pytest.mark.skipif(
+    shutil.which("node") is None, reason="needs Node.js on PATH",
+)
+
+
+@_needs_node
+def test_stepper_locks_decisions_while_saving_then_advances(tmp_path):
+    seen = _run_stepper(tmp_path)
+    assert seen == {
+        "disabledWhilePending": True,
+        "shownWhilePending": 0,
+        "shownAfterSave": 1,
+        "enabledAfterSave": True,
+        "savedDecision": "confirmed",
+    }
+
+
+@_needs_node
+def test_stepper_keeps_the_record_moved_to_during_a_save(tmp_path):
+    # Record 1 is confirmed, then Next shows record 2 before the reply
+    # lands. The reply must not push the stepper on past record 2.
+    seen = _run_stepper(tmp_path, "press-next")
+    assert seen["shownWhilePending"] == 1
+    assert seen["savedDecision"] == "confirmed"
+    assert seen["shownAfterSave"] == 1
+    assert seen["enabledAfterSave"] is True
