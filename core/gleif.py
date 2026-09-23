@@ -29,6 +29,11 @@ MAX_RETRIES = 3
 #: Seconds to wait before the first retry; doubled after each attempt.
 INITIAL_BACKOFF = 1.0
 
+#: Longest Retry-After, in seconds, taken at its word. GLEIF limits
+#: requests per minute, so a real wait is about a minute at most; a
+#: longer (or absurd) value is cut to this, so it stays a sane number.
+MAX_RETRY_AFTER = 300.0
+
 # Strategy-3 abbreviation expansions, applied before a legalName search.
 _RE_LMT = re.compile(r"\bLmt\.?\b", re.IGNORECASE)
 _RE_CORP = re.compile(r"\bCorp\.?\b", re.IGNORECASE)
@@ -90,18 +95,22 @@ class DeadlineExceeded(Exception):
 def _retry_after(resp: requests.Response, default: float) -> float:
     """Seconds a 429 reply asks to wait (its Retry-After), else default.
 
-    Retry-After holds either a number of seconds or an HTTP date.
+    Retry-After holds either a number of seconds or an HTTP date. The
+    wait is capped at MAX_RETRY_AFTER.
     """
     value = resp.headers.get("Retry-After", "").strip()
-    if value.isdigit():
-        return float(value)
+    # isdigit() alone also accepts digits float() rejects, such as a
+    # Latin-1 superscript two.
+    if value.isascii() and value.isdigit():
+        return min(float(value), MAX_RETRY_AFTER)
     try:
         when = parsedate_to_datetime(value)
     except (TypeError, ValueError):
         return default
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
-    return max((when - datetime.now(timezone.utc)).total_seconds(), 0.0)
+    seconds = (when - datetime.now(timezone.utc)).total_seconds()
+    return min(max(seconds, 0.0), MAX_RETRY_AFTER)
 
 
 def _json_object(resp: requests.Response) -> Optional[dict]:

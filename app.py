@@ -68,18 +68,24 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 ALLOWED_UPLOAD_EXTENSIONS = (".xlsx", ".csv", ".tsv", ".txt")
 
 #: How many entities one /run call looks up at most, and the wall-clock
-#: budget after which a call stops early and returns partial progress.
-#: The budget is also the GLEIF client's deadline: no request or retry
-#: starts after it and each request's timeout is cut to fit it, so a
-#: call ends within about the budget even when GLEIF is slow, far
-#: under the function's time limit.
+#: budget after which a call starts no further lookup and returns
+#: partial progress.
 RUN_CHUNK_SIZE = 5
 RUN_TIME_BUDGET_SECONDS = 40
 
+#: The GLEIF client's deadline, in seconds from the start of a /run
+#: call: no request or retry starts after it and each request's
+#: timeout is cut to fit it, so a call ends by then even when GLEIF is
+#: slow, far under the function's time limit. It lies well past the
+#: budget because one lookup makes up to about 20 requests, which a
+#: slow or flaky GLEIF can stretch past the budget while still
+#: answering every one.
+RUN_DEADLINE_SECONDS = 120
+
 #: How many /run calls may fail on the same entity - GLEIF answering
 #: its lookup with server errors, or the lookup not fitting even into a
-#: call of its own - before it is stored as a failed lookup, so that
-#: one bad entity cannot stall the job for ever.
+#: call's whole deadline - before it is stored as a failed lookup, so
+#: that one bad entity cannot stall the job for ever.
 RUN_MAX_ATTEMPTS = 3
 
 GLEIF_DOWN_MESSAGE = "GLEIF service is unavailable. Please try again later."
@@ -100,7 +106,7 @@ GLEIF_ERRORS_NOTE = (
     "assigned. Please search this entity again later."
 )
 GLEIF_TOO_SLOW_NOTE = (
-    "Lookup failed: GLEIF did not answer in time - LEI not assigned. "
+    "Lookup failed: the GLEIF search took too long - LEI not assigned. "
     "Please search this entity again later."
 )
 
@@ -306,16 +312,16 @@ def _lookup_row(
     A lookup that failed for good becomes a NO_MATCH row whose note
     says so: an unexpected error, a query GLEIF refuses, or - once
     RUN_MAX_ATTEMPTS calls have failed on the entity - GLEIF server
-    errors or a lookup too slow for a call of its own. Whatever is
-    worth retrying later is raised instead.
+    errors or a lookup too slow for a call's whole deadline. Whatever
+    is worth retrying later is raised instead.
 
     Args:
         job_id: The job's id.
         index: The entity's position in the job's query.
         entity: The entity to look up.
         client: The call's open GLEIF client.
-        alone: Whether the lookup has the call's whole time budget (it
-            is the first of the call).
+        alone: Whether the lookup has the call's whole deadline (it is
+            the first of the call).
 
     Returns:
         The entity's result row.
@@ -338,8 +344,8 @@ def _lookup_row(
         return _failed_row(entity, GLEIF_ERRORS_NOTE)
     except DeadlineExceeded:
         # Cut off, not failed: the next call looks it up afresh. Only
-        # a lookup that had a whole call to itself counts as failing,
-        # as trying that again cannot go better.
+        # a lookup that had the call's whole deadline to itself counts
+        # as failing, as trying that again cannot go better.
         if not alone or not _gave_up(job_id, index):
             raise
         logger.warning(
@@ -368,8 +374,10 @@ def run_job(job_id: str):
     ``error_cs``), so a later call resumes from there. When GLEIF
     rate-limits for longer than the call has left, the reply is the
     progress plus ``throttled`` and ``retry_after`` (the seconds to
-    wait before the next call). A lookup cut off by the time budget is
-    not stored and the next call starts it again, while one that failed
+    wait before the next call). Once RUN_TIME_BUDGET_SECONDS have
+    passed no further lookup starts, and the one under way must end by
+    RUN_DEADLINE_SECONDS. A lookup cut off by that deadline is not
+    stored and the next call starts it again, while one that failed
     for good is stored as a failed lookup (see ``_lookup_row``), so
     the job can always finish. Two calls racing on one job (a second
     tab, or a refresh while the previous call is still running) cannot
@@ -387,7 +395,7 @@ def run_job(job_id: str):
     retry_after = None
     started = time.monotonic()
     with GleifClient() as client:
-        client.deadline = started + RUN_TIME_BUDGET_SECONDS
+        client.deadline = started + RUN_DEADLINE_SECONDS
         for index, record in enumerate(pending[:RUN_CHUNK_SIZE], offset):
             entity = _entity_from_input(record)
             try:

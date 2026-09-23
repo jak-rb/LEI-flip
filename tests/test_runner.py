@@ -76,6 +76,13 @@ def _no_openfigi(*args, **kwargs):
     raise requests.ConnectionError("OpenFIGI is offline in tests")
 
 
+def _openfigi_two_names(*args, **kwargs):
+    """OpenFIGI knowing two issuer names (the longest lookups)."""
+    return _response(body=[{"data": [
+        {"name": "APPLE INC"}, {"name": "APPLE COMPUTER INC"},
+    ]}])
+
+
 @pytest.fixture
 def clock(monkeypatch):
     clock = _Clock()
@@ -399,14 +406,14 @@ def test_rate_limit_waits_as_long_as_retry_after_asks(session, clock):
         assert low <= clock.now - started <= high
 
 
-def test_rate_limit_past_the_budget_answers_throttled_with_progress(
+def test_rate_limit_past_the_deadline_answers_throttled_with_progress(
     client, session, clock,
 ):
     limited = {"on": True}
 
     def handler(params, timeout):
         if limited["on"] and _mentions(params, "Beta"):
-            return _response(429, headers={"Retry-After": "120"})
+            return _response(429, headers={"Retry-After": "200"})
         return _response()
     session.handler = handler
     job_id = _create_job(
@@ -418,7 +425,7 @@ def test_rate_limit_past_the_budget_answers_throttled_with_progress(
 
     assert response.status_code == 200
     body = response.get_json()
-    assert body["throttled"] is True and body["retry_after"] == 120
+    assert body["throttled"] is True and body["retry_after"] == 200
     assert (body["searched"], body["done"]) == (1, False)
     assert "error" not in body
     # The call hands the wait to the browser instead of sleeping.
@@ -430,11 +437,54 @@ def test_rate_limit_past_the_budget_answers_throttled_with_progress(
     assert "throttled" not in body
 
 
+# An absurdly long number of seconds, and a Latin-1 superscript two
+# (which str.isdigit() accepts but float() does not).
+@pytest.mark.parametrize(
+    "header", ["9" * 400, "\xb2"], ids=["overlong", "superscript"],
+)
+def test_broken_retry_after_is_still_just_a_rate_limit(
+    client, session, header,
+):
+    limited = {"on": True}
+
+    def handler(params, timeout):
+        if limited["on"] and _mentions(params, "Beta"):
+            return _response(429, headers={"Retry-After": header})
+        return _response()
+    session.handler = handler
+    job_id = _create_job(
+        client, ["Alpha a.s.,,CZ", "Beta a.s.,,CZ", "Gamma a.s.,,CZ"],
+    )
+
+    response = _run(client, job_id)
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["throttled"] is True
+    assert isinstance(body["retry_after"], int)
+    assert 0 < body["retry_after"] <= gleif.MAX_RETRY_AFTER
+    assert (body["searched"], body["done"]) == (1, False)
+
+    limited["on"] = False
+    body = _run(client, job_id).get_json()
+    assert (body["searched"], body["done"]) == (3, True)
+    assert not any(note.startswith("Lookup failed") for note in _notes(
+        job_id))
+
+
 # ---- (f) the deadline of one /run call ----
 
 def _call_bound():
-    """Longest one /run call may take: its budget, a request, slack."""
-    return app_module.RUN_TIME_BUDGET_SECONDS + REQUEST_TIMEOUT + 1
+    """Longest one /run call may take: its deadline, plus slack.
+
+    No request outlasts the deadline, as its timeout is cut to fit.
+    """
+    return app_module.RUN_DEADLINE_SECONDS + 1
+
+
+def test_one_run_call_ends_far_under_the_function_time_limit():
+    # vercel.json lets app.py run for at most 300 s per invocation.
+    assert app_module.RUN_TIME_BUDGET_SECONDS < _call_bound() <= 300 / 2
 
 
 def test_request_timeout_is_short():
@@ -491,7 +541,7 @@ def test_one_run_call_ends_in_time_when_first_attempts_time_out(
     response = _run(client, job_id)
 
     assert clock.now - started <= _call_bound()
-    deadline = started + app_module.RUN_TIME_BUDGET_SECONDS
+    deadline = started + app_module.RUN_DEADLINE_SECONDS
     # No request starts after the deadline or may run past it.
     assert all(
         start < deadline and start + timeout <= deadline + 1e-9
@@ -502,19 +552,35 @@ def test_one_run_call_ends_in_time_when_first_attempts_time_out(
     assert (body["searched"], body["done"]) == (0, False)
 
 
+def _answer_after(clock, seconds):
+    """A GLEIF handler whose every reply takes ``seconds`` to come."""
+    def handler(params, timeout):
+        if seconds > timeout:
+            clock.now += timeout
+            raise requests.Timeout("read timed out")
+        clock.now += seconds
+        return _response()
+    return handler
+
+
 def test_lookup_cut_off_by_the_deadline_is_retried_not_failed(
     client, session, clock,
 ):
-    # Alpha's requests take 3 s each, Slow's 5 s: Slow cannot finish
-    # before the deadline, so the call returns Alpha alone.
+    # Alpha's requests take 5 s each, Slow's 9 s: Alpha ends inside the
+    # budget, so Slow starts, but it cannot finish before the deadline
+    # and the call returns Alpha alone.
     slow = {"on": True}
+    alpha, late = _answer_after(clock, 5), _answer_after(clock, 9)
 
     def handler(params, timeout):
-        seconds = 5 if _mentions(params, "Slow") else 3
-        clock.now += seconds if slow["on"] else 0.1
-        return _response()
+        if not slow["on"]:
+            clock.now += 0.1
+            return _response()
+        if _mentions(params, "Alpha"):
+            return alpha(params, timeout)
+        return late(params, timeout)
     session.handler = handler
-    job_id = _create_job(client, ["Alpha a.s.,,CZ", "Slow a.s.,,CZ"])
+    job_id = _create_job(client, ["Alpha a.s.,,CZ", f"Slow a.s.,{ISIN},CZ"])
 
     started = clock.now
     response = _run(client, job_id)
@@ -528,28 +594,72 @@ def test_lookup_cut_off_by_the_deadline_is_retried_not_failed(
     body = _run(client, job_id).get_json()
     assert (body["searched"], body["done"]) == (2, True)
     assert "failed_attempts" not in storage.get_search(job_id)["query"][1]
-    assert _notes(job_id)[1] == "No LEI found in the GLEIF database."
+    assert not _notes(job_id)[1].startswith("Lookup failed")
 
 
 def test_lookup_that_never_fits_in_a_call_is_given_up(
-    client, session, clock,
+    client, session, clock, monkeypatch,
 ):
-    # Every request takes 9 s: one lookup needs far longer than a whole
-    # call, so repeating it can never help.
-    def handler(params, timeout):
-        clock.now += min(9, timeout)
-        if timeout < 9:
-            raise requests.Timeout("read timed out")
-        return _response()
-    session.handler = handler
-    job_id = _create_job(client, ["Alpha a.s.,,CZ"])
+    # Every request takes 9 s and the lookup makes 20 of them: it needs
+    # longer than a whole call, so repeating it can never help.
+    monkeypatch.setattr(openfigi.requests, "post", _openfigi_two_names)
+    session.handler = _answer_after(clock, 9)
+    job_id = _create_job(client, [f"Alpha a.s.,{ISIN},CZ,Praha"])
 
     for _ in range(app_module.RUN_MAX_ATTEMPTS - 1):
+        started = clock.now
         body = _run(client, job_id).get_json()
+        assert clock.now - started <= _call_bound()
         assert (body["searched"], body["done"]) == (0, False)
     body = _run(client, job_id).get_json()
     assert (body["searched"], body["done"]) == (1, True)
-    assert _notes(job_id)[0].startswith("Lookup failed")
+    assert _notes(job_id)[0] == app_module.GLEIF_TOO_SLOW_NOTE
+
+
+def _flaky(clock):
+    """A GLEIF whose every 4th request hangs until its timeout."""
+    requests_seen = {"count": 0}
+
+    def handler(params, timeout):
+        requests_seen["count"] += 1
+        if requests_seen["count"] % 4 == 0:
+            clock.now += timeout
+            raise requests.Timeout("read timed out")
+        clock.now += 0.5
+        return _response()
+    return handler
+
+
+@pytest.mark.parametrize("gleif_kind", ["slow", "flaky"])
+def test_gleif_that_is_slow_or_flaky_but_answers_fails_no_entity(
+    client, session, clock, monkeypatch, gleif_kind,
+):
+    # Each lookup makes 20 requests. Answered in 2.5 s each, or with a
+    # quarter of them hanging for the whole timeout first, it outlasts
+    # the budget but fits well within one call's deadline.
+    monkeypatch.setattr(openfigi.requests, "post", _openfigi_two_names)
+    session.handler = (
+        _answer_after(clock, 2.5) if gleif_kind == "slow" else _flaky(clock)
+    )
+    lines = [f"Firm {index} a.s.,{ISIN},CZ,Praha" for index in range(3)]
+    job_id = _create_job(client, lines)
+
+    calls = 0
+    body = {"done": False}
+    while not body["done"] and calls < 10:
+        started = clock.now
+        response = _run(client, job_id)
+        calls += 1
+        assert clock.now - started <= _call_bound()
+        assert response.status_code == 200
+        body = response.get_json()
+
+    assert body["done"] is True
+    assert not any(note.startswith("Lookup failed") for note in _notes(
+        job_id))
+    # A call starts no lookup once its budget is spent, so progress
+    # comes back one lookup at a time here, none of it cut off.
+    assert calls == len(lines)
 
 
 def test_openfigi_request_stops_at_the_deadline(monkeypatch, clock):

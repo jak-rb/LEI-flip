@@ -329,4 +329,3 @@ def record_failed_attempt(job_id: str, index: int) -> Optional[int]:
             return None
     return count
 
-

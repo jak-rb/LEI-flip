@@ -16,7 +16,7 @@ GLEIF_BASE_URL = "https://api.gleif.org/api/v1"
 
 #: HTTP request timeout in seconds, applied to GLEIF calls. GLEIF
 #: normally answers within a second or two; a short timeout leaves a
-#: /run call's time budget room for the retries (see core/gleif.py).
+#: /run call's deadline room for the retries (see core/gleif.py).
 REQUEST_TIMEOUT = 10.0
 
 #: OpenFIGI mapping endpoint. Resolves an ISIN to its issuer name(s) as
