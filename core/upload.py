@@ -16,7 +16,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 from pydantic import ValidationError
 
-from .models import InputEntity
+from .models import InputEntity, InputError
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +32,12 @@ _HEADER_CELLS = frozenset({
     "issuer", "issuer name", "firma", "nazev", "název",
 })
 
-#: Shown for a .csv whose content cannot be read as rows of text.
+#: Shown (English, Czech) for a .csv that cannot be read as text rows.
 _UNREADABLE_CSV = (
     "Could not read the .csv file. Save it from Excel as CSV UTF-8, "
-    "or upload the .xlsx instead."
+    "or upload the .xlsx instead.",
+    "Soubor .csv se nepodařilo přečíst. Uložte ho z Excelu jako CSV "
+    "UTF-8 nebo nahrajte soubor .xlsx.",
 )
 
 
@@ -50,11 +52,11 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
         The parsed entities (rows with a name or an ISIN).
 
     Raises:
-        ValueError: For an empty/unreadable file, an unsupported
+        InputError: For an empty/unreadable file, an unsupported
             extension, no usable rows, or more than MAX_ENTITIES rows.
     """
     if not content:
-        raise ValueError("The file is empty.")
+        raise InputError("The file is empty.", "Soubor je prázdný.")
 
     ext = Path(filename).suffix.lower()
     if ext == ".xlsx":
@@ -62,21 +64,27 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
     elif ext == ".csv":
         rows = _read_csv(content)
     else:
-        raise ValueError(
-            "Unsupported file type. Please upload a .xlsx or .csv file."
+        raise InputError(
+            "Unsupported file type. Please upload a .xlsx or .csv file.",
+            "Nepodporovaný typ souboru. Nahrajte prosím soubor .xlsx "
+            "nebo .csv.",
         )
 
     rows = _drop_header(rows)
     entities = _rows_to_entities(rows)
     if not entities:
-        raise ValueError(
+        raise InputError(
             "No entities found. Each row needs a name (first column) or "
-            "an ISIN (second column)."
+            "an ISIN (second column).",
+            "Nebyly nalezeny žádné subjekty. Každý řádek musí obsahovat "
+            "název (první sloupec) nebo ISIN (druhý sloupec).",
         )
     if len(entities) > MAX_ENTITIES:
-        raise ValueError(
+        raise InputError(
             f"Too many entities ({len(entities)}). The maximum is "
-            f"{MAX_ENTITIES} per file."
+            f"{MAX_ENTITIES} per file.",
+            f"Příliš mnoho subjektů ({len(entities)}). Maximum je "
+            f"{MAX_ENTITIES} na soubor.",
         )
     return entities
 
@@ -89,8 +97,10 @@ def _read_xlsx(content: bytes) -> list[list[str]]:
         )
     except Exception as error:
         logger.warning("Failed to parse uploaded .xlsx file: %s", error)
-        raise ValueError(
-            "Could not read the .xlsx file; is it a valid Excel file?"
+        raise InputError(
+            "Could not read the .xlsx file; is it a valid Excel file?",
+            "Soubor .xlsx se nepodařilo přečíst. Je to platný soubor "
+            "Excelu?",
         ) from error
 
     sheet = workbook.active
@@ -125,7 +135,7 @@ def _read_csv(content: bytes) -> list[list[str]]:
     # workbook renamed to .csv, which would only parse into garbage.
     if "\x00" in text:
         logger.warning("Uploaded .csv file is binary (contains NUL)")
-        raise ValueError(_UNREADABLE_CSV)
+        raise InputError(*_UNREADABLE_CSV)
     sample = "\n".join(text.splitlines()[:5])
     delimiter = ";" if sample.count(";") > sample.count(",") else ","
     # newline="" leaves line endings to the csv module, which accepts
@@ -135,7 +145,7 @@ def _read_csv(content: bytes) -> list[list[str]]:
         return [[cell.strip() for cell in row] for row in reader]
     except csv.Error as error:  # e.g. a cell over the 128 KB limit
         logger.warning("Failed to parse uploaded .csv file: %s", error)
-        raise ValueError(_UNREADABLE_CSV) from error
+        raise InputError(*_UNREADABLE_CSV) from error
 
 
 def _drop_header(rows: list[list[str]]) -> list[list[str]]:

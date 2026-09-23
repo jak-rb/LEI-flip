@@ -57,6 +57,15 @@ function t(key, ...args) {
     return typeof value === "function" ? value(...args) : value;
 }
 
+// The server's JSON error replies carry the message in English ("error")
+// and Czech ("error_cs"); return the one for the current language, if any.
+function serverError(data) {
+    if (!data) {
+        return null;
+    }
+    return (currentLang() === "cs" && data.error_cs) || data.error || null;
+}
+
 function themeIsDark() {
     return document.documentElement.getAttribute("data-theme") === "dark";
 }
@@ -217,7 +226,7 @@ async function submitSearch(form, formData) {
             data = null;
         }
         if (!response.ok || !data || !data.job_id) {
-            showFormError(form, (data && data.error) || t("couldNotStart"));
+            showFormError(form, serverError(data) || t("couldNotStart"));
             return;
         }
         window.location.href =
@@ -481,7 +490,7 @@ async function runJob(jobId) {
         // fetch() only rejects on a network failure, not on a 4xx/5xx status,
         // so check the status ourselves to report a server error as one.
         if (!response.ok || !data) {
-            const reason = (data && data.error) || t("serverFailed");
+            const reason = serverError(data) || t("serverFailed");
             showResultsError(els, reason + " " + t("reloadToResume"));
             return;
         }

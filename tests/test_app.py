@@ -89,6 +89,7 @@ def test_single_without_name_or_isin_is_rejected(client):
     response = _create_single(client, entity_name="  ")
     assert response.status_code == 400
     assert "entity name or an ISIN" in response.get_json()["error"]
+    assert "název subjektu nebo ISIN" in response.get_json()["error_cs"]
 
 
 def test_single_match_flow(client):
@@ -192,6 +193,7 @@ def test_bulk_rejects_wrong_extension_and_empty_file(client):
     )
     assert wrong.status_code == 400
     assert "Unsupported file type" in wrong.get_json()["error"]
+    assert "Nepodporovaný typ souboru" in wrong.get_json()["error_cs"]
 
     empty = client.post(
         "/api/jobs",
@@ -200,6 +202,7 @@ def test_bulk_rejects_wrong_extension_and_empty_file(client):
     )
     assert empty.status_code == 400
     assert "empty" in empty.get_json()["error"].lower()
+    assert "prázdný" in empty.get_json()["error_cs"]
 
 
 def test_bulk_reads_utf16_and_cr_files_and_refuses_unreadable(client):
@@ -222,7 +225,9 @@ def test_bulk_reads_utf16_and_cr_files_and_refuses_unreadable(client):
     for content in (renamed.getvalue(), b"Match AG,," + b"x" * 200_000):
         refused = _create_bulk(client, content)
         assert refused.status_code == 400
-        assert "Could not read the .csv file" in refused.get_json()["error"]
+        body = refused.get_json()
+        assert "Could not read the .csv file" in body["error"]
+        assert "Soubor .csv se nepodařilo přečíst" in body["error_cs"]
 
 
 def test_gleif_outage_keeps_progress_and_resumes(client, monkeypatch):
@@ -239,6 +244,7 @@ def test_gleif_outage_keeps_progress_and_resumes(client, monkeypatch):
     assert failed.status_code == 503
     body = failed.get_json()
     assert body["error"] == app_module.GLEIF_DOWN_MESSAGE
+    assert body["error_cs"] == app_module.GLEIF_DOWN_MESSAGE_CS
     # The first entity completed before the outage and was kept.
     assert body["searched"] == 1 and body["done"] is False
 

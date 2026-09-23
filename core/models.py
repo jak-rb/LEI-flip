@@ -74,6 +74,18 @@ class InputEntity(BaseModel):
         return self
 
 
+class InputError(ValueError):
+    """Input the user must fix, with its message in English and Czech.
+
+    The English text is the exception's message (``str(error)``); the
+    web layer returns both, so the page shows the one for its language.
+    """
+
+    def __init__(self, message: str, message_cs: str) -> None:
+        super().__init__(message)
+        self.message_cs = message_cs
+
+
 class GleifAddress(BaseModel):
     """Address as returned by the GLEIF API."""
 

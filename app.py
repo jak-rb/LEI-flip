@@ -28,7 +28,7 @@ from pydantic import ValidationError
 from core import export, storage
 from core.gleif import GleifApiError, GleifClient
 from core.lookup import lookup_entity
-from core.models import InputEntity
+from core.models import InputEntity, InputError
 from core.upload import parse_upload
 
 logging.basicConfig(
@@ -68,6 +68,7 @@ RUN_CHUNK_SIZE = 5
 RUN_TIME_BUDGET_SECONDS = 40
 
 GLEIF_DOWN_MESSAGE = "GLEIF service is unavailable. Please try again later."
+GLEIF_DOWN_MESSAGE_CS = "Služba GLEIF je nedostupná. Zkuste to prosím později."
 
 
 @app.route("/health")
@@ -163,12 +164,15 @@ def _single_entities() -> list[InputEntity]:
     """The one entity of the single-lookup form.
 
     Raises:
-        ValueError: With the message to show when the input is unusable.
+        InputError: With the message to show when the input is unusable.
     """
     name = request.form.get("entity_name", "").strip()
     isin = request.form.get("isin") or None
     if not name and not isin:
-        raise ValueError("Please enter an entity name or an ISIN.")
+        raise InputError(
+            "Please enter an entity name or an ISIN.",
+            "Zadejte název subjektu nebo ISIN.",
+        )
     try:
         entity = InputEntity(
             name=name,
@@ -179,7 +183,10 @@ def _single_entities() -> list[InputEntity]:
             zip_code=request.form.get("postal_code") or None,
         )
     except ValidationError as error:
-        raise ValueError("Please check the entered values.") from error
+        raise InputError(
+            "Please check the entered values.",
+            "Zkontrolujte prosím zadané hodnoty.",
+        ) from error
     return [entity]
 
 
@@ -193,15 +200,20 @@ def _bulk_entities() -> list[InputEntity]:
     return 413.)
 
     Raises:
-        ValueError: With the message to show when the file is unusable.
+        InputError: With the message to show when the file is unusable.
     """
     upload = request.files.get("file_upload")
     filename = (upload.filename or "") if upload else ""
     if not filename:
-        raise ValueError("Please attach a .xlsx or .csv file.")
+        raise InputError(
+            "Please attach a .xlsx or .csv file.",
+            "Přiložte prosím soubor .xlsx nebo .csv.",
+        )
     if not filename.lower().endswith(ALLOWED_UPLOAD_EXTENSIONS):
-        raise ValueError(
-            "Unsupported file type. Please upload a .xlsx or .csv file."
+        raise InputError(
+            "Unsupported file type. Please upload a .xlsx or .csv file.",
+            "Nepodporovaný typ souboru. Nahrajte prosím soubor .xlsx "
+            "nebo .csv.",
         )
     return parse_upload(filename, upload.read())
 
@@ -212,14 +224,20 @@ def create_job():
 
     Validates the input and stores the entities to look up under a new
     ``job_id`` (nothing is looked up yet). Returns ``{"job_id", "total"}``,
-    or 400 with ``{"error": ...}`` when the input is unusable, so the
-    search page can show the message next to its Search button.
+    or 400 with ``{"error", "error_cs"}`` (the message in English and
+    Czech) when the input is unusable, so the search page can show it
+    next to its Search button.
     """
     mode = "bulk" if request.form.get("mode") == "bulk" else "single"
     try:
         entities = _bulk_entities() if mode == "bulk" else _single_entities()
     except ValueError as error:
-        return {"error": str(error)}, 400
+        # An InputError carries its Czech version; any other error only
+        # has its own text.
+        return {
+            "error": str(error),
+            "error_cs": getattr(error, "message_cs", str(error)),
+        }, 400
 
     job_id = secrets.token_hex(16)
     storage.create_search(
@@ -236,11 +254,11 @@ def run_job(job_id: str):
 
     Returns the job's progress (see ``_progress``); the browser keeps
     calling until ``done`` is true. A GLEIF outage saves whatever
-    completed and answers 503 with an ``error`` message, so a later
-    call resumes from there. Two calls racing on one job (a second tab,
-    or a refresh while the previous call is still running) cannot store
-    an entity twice: the store only accepts rows that continue from the
-    result count this call started at.
+    completed and answers 503 with an ``error`` message (and its Czech
+    ``error_cs``), so a later call resumes from there. Two calls racing
+    on one job (a second tab, or a refresh while the previous call is
+    still running) cannot store an entity twice: the store only accepts
+    rows that continue from the result count this call started at.
     """
     search = storage.get_search(job_id)
     if search is None:
@@ -249,7 +267,7 @@ def run_job(job_id: str):
     offset = len(search["results"])
     pending = search["query"][offset:]
     rows = []
-    error = None
+    gleif_down = False
     started = time.monotonic()
     try:
         with GleifClient() as client:
@@ -261,7 +279,7 @@ def run_job(job_id: str):
                     break
     except GleifApiError as exc:
         logger.exception("GLEIF lookup failed: %s", exc)
-        error = GLEIF_DOWN_MESSAGE
+        gleif_down = True
 
     if rows:
         # None: a rival call stored these entities first (or the job
@@ -272,8 +290,12 @@ def run_job(job_id: str):
             or search
         )
     progress = _progress(search)
-    if error:
-        return {"error": error, **progress}, 503
+    if gleif_down:
+        return {
+            "error": GLEIF_DOWN_MESSAGE,
+            "error_cs": GLEIF_DOWN_MESSAGE_CS,
+            **progress,
+        }, 503
     return progress
 
 

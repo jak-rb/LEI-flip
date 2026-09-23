@@ -258,6 +258,10 @@ a match.
   `data-cs-title`, `data-cs-aria-label`); `applyLang()` in
   `public/app.js` swaps them, and rich text uses `.only-cs` / `.only-en`
   blocks. Strings the script writes itself live in its `STRINGS` table.
+  Error messages in the server's JSON replies come as `error` (English)
+  and `error_cs` (Czech): raise `core.models.InputError(english, czech)`
+  for input the user must fix, and the script's `serverError()` shows
+  the one for the current language.
   Every new user-visible string needs both languages.
 
 ### Deployment (Vercel)
