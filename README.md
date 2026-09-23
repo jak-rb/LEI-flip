@@ -4,7 +4,7 @@ A small web tool for finding a company's Legal Entity Identifier (LEI)
 in the [GLEIF](https://www.gleif.org/) database. A user can run a
 single lookup (an entity name or an ISIN, optionally with address
 fields to narrow the result) or a bulk lookup by uploading an
-`.xlsx`/`.csv` file of entities. Matching is deterministic and
+`.xlsx`, `.csv`, `.tsv` or `.txt` file of entities. Matching is deterministic and
 precision-first (no LLM): it asserts a LEI only when the name and legal
 address agree, or an ISIN resolves the identity; weaker hits are
 surfaced for manual review.
@@ -12,6 +12,9 @@ surfaced for manual review.
 The app is a Flask application deployed on [Vercel](https://vercel.com)
 (Python runtime) with a Neon Postgres store for the 30-day search
 history. It runs locally with no setup, falling back to SQLite.
+
+> **Work in progress:** open test findings and next steps are in
+> [HANDOFF.md](HANDOFF.md).
 
 ## Endpoints
 
@@ -49,7 +52,7 @@ core/               # backend lookup logic
   openfigi.py       # OpenFIGI client: ISIN -> issuer name (fallback)
   storage.py        # search store: Postgres (DATABASE_URL) or SQLite
   export.py         # build CSV / Excel from a stored search
-  upload.py         # parse an uploaded .xlsx/.csv into entities
+  upload.py         # parse an uploaded .xlsx/.csv/.tsv/.txt into entities
 data/               # committed lookup tables
   country_mapping.json   # country name (cs/en) -> ISO alpha-2
   legal_forms.txt        # legal-form suffixes stripped before matching

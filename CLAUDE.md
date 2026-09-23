@@ -286,6 +286,10 @@ a match.
 
 ### Current state
 
+**Work in progress (2026-09-23): read `HANDOFF.md` first.** It holds the
+confirmed findings of a large test run, grouped into fix batches, and
+the next steps (starting with the user's `tests/fixtures/test_lei.xlsx`).
+
 Feature-complete and deployable. Single and bulk search run against live
 GLEIF through the job endpoints, every search is persisted under a `job_id`
 (Postgres on Vercel, SQLite locally), and the results page, the manual
