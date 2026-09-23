@@ -44,10 +44,6 @@ XML_ILLEGAL = [
     chr(code) for code in range(0x20) if chr(code) not in "\t\n\r"
 ] + ["\ufffe", "\uffff"]
 
-#: The ones the exports drop. The rest (VT, FF, FS-US) read as
-#: whitespace and export as a space (tests/test_misc_fixes.py).
-XML_ILLEGAL_DROPPED = [char for char in XML_ILLEGAL if not char.isspace()]
-
 
 class _FakeGleifClient:
     def __enter__(self):
@@ -121,14 +117,15 @@ def _exported_rows(client, job_id):
 
 
 @pytest.mark.parametrize(
-    "char", XML_ILLEGAL_DROPPED,
-    ids=[f"U+{ord(c):04X}" for c in XML_ILLEGAL_DROPPED],
+    "char", XML_ILLEGAL, ids=[f"U+{ord(c):04X}" for c in XML_ILLEGAL],
 )
 def test_exports_drop_xml_illegal_characters(client, char):
     # Reachable from the single form, any upload, and GLEIF's own
     # strings: the Excel download used to answer 500 (IllegalCharacter
     # Error) for a control character and write a workbook openpyxl and
-    # Excel cannot open for U+FFFE/U+FFFF.
+    # Excel cannot open for U+FFFE/U+FFFF. The ones that read as
+    # whitespace (VT, FF, FS-US) export as a space instead.
+    sep = " " if char.isspace() else ""
     job_id = _finished_job(
         client,
         entity_name=f"Match{char}Jedna a.s.",
@@ -143,28 +140,28 @@ def test_exports_drop_xml_illegal_characters(client, char):
         assert (
             row["Name"], row["ISIN"], row["Country"], row["Town"],
             row["Street"], row["ZIP code"],
-        ) == ("MatchJedna a.s.", "CZ0005112300", "CZ", "Praha",
-              "Ulice 1", "11000")
+        ) == (f"Match{sep}Jedna a.s.", f"CZ{sep}0005112300",
+              f"C{sep}Z", f"Pra{sep}ha", f"Ulice{sep} 1", f"110{sep}00")
         assert row["LEI"] == MATCH_LEI
         # Every GLEIF string of the fake repeats the name.
         for column in (
             "LEI_status", "Warnings", "GLEIF_legal_name",
             "GLEIF_legal_address", "GLEIF_hq_address", "Notes",
         ):
-            assert row[column] == "MatchJedna a.s.", column
+            assert row[column] == f"Match{sep}Jedna a.s.", column
 
 
 @pytest.mark.parametrize(
-    "char", XML_ILLEGAL_DROPPED,
-    ids=[f"U+{ord(c):04X}" for c in XML_ILLEGAL_DROPPED],
+    "char", XML_ILLEGAL, ids=[f"U+{ord(c):04X}" for c in XML_ILLEGAL],
 )
 def test_exports_drop_xml_illegal_characters_of_a_candidate(client, char):
     # A near-miss exports the lookup's notes; once the user confirms the
     # candidate, its GLEIF name, status and addresses are exported.
+    expected = "Review Ltd" if char.isspace() else "ReviewLtd"
     job_id = _finished_job(client, entity_name=f"Review{char}Ltd")
     for rows in _exported_rows(client, job_id):
-        assert rows[0]["Name"] == "ReviewLtd"
-        assert rows[0]["Notes"] == "ReviewLtd"
+        assert rows[0]["Name"] == expected
+        assert rows[0]["Notes"] == expected
 
     confirmed = client.post(
         "/api/decision",
@@ -180,7 +177,7 @@ def test_exports_drop_xml_illegal_characters_of_a_candidate(client, char):
             "LEI_status", "GLEIF_legal_name", "GLEIF_legal_address",
             "GLEIF_hq_address",
         ):
-            assert row[column] == "ReviewLtd", column
+            assert row[column] == expected, column
 
 
 def test_exports_neutralise_a_formula_behind_a_control_character(client):
