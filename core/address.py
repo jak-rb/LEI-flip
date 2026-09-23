@@ -137,14 +137,19 @@ def _shorten_whitespace_run(match: re.Match) -> str:
     # whitespace: "A", 498 spaces, "B" took up to a second per call,
     # and one /run took minutes. For a run of two or more characters,
     # the output of normalize_name depends only on the run's last
-    # character (a legal-form match may leave it behind), on the set
-    # of characters in it (a newline stops the share-class ".*", and
-    # unidecode drops U+0085), and on whether it is longer than the 20
+    # character (a legal-form match may leave it behind), on whether it
+    # holds a newline (which stops the share-class ".*"), U+0085 (which
+    # unidecode drops) or any other whitespace (all of which unidecode
+    # turns into whitespace), and on whether it is longer than the 20
     # characters the trailing-parentheses pattern allows. The shorter
-    # run keeps all three: its first 20 characters, one of each other
-    # character, and its last character.
+    # run keeps all of that in at most 24 characters: its first 20,
+    # one of each of those three kinds in the rest, and its last one.
     run = match.group()
-    return run[:20] + "".join(dict.fromkeys(run[20:-1])) + run[-1]
+    rest = run[20:-1]
+    kinds = "".join(char for char in "\n\x85" if char in rest)
+    if any(char not in "\n\x85" for char in rest):
+        kinds += " "
+    return run[:20] + kinds + run[-1]
 
 
 # The matcher normalizes the searched name again for every name of

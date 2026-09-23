@@ -17,6 +17,7 @@ GLEIF and OpenFIGI are faked; nothing here touches the network.
 import csv
 import io
 import random
+import re
 import time
 
 import pytest
@@ -281,13 +282,10 @@ SAMPLE_NAMES = [
     "7-Eleven, Inc.",
 ]
 
-#: A sample of what ``\s`` matches: ASCII whitespace, the no-break and
-#: ideographic spaces, the line separators, and U+0085, the one that
-#: unidecode drops.
-WHITESPACE = [
-    " ", "\t", "\n", "\r", "\x0b", "\x0c", "\x1c", "\x85", "\u00a0",
-    "\u2028", "\u2029", "\u3000",
-]
+#: The 29 characters ``\s`` matches: ASCII whitespace, the no-break,
+#: ideographic and other spaces, the line separators, and U+0085, the
+#: one that unidecode drops.
+WHITESPACE = re.findall(r"\s", "".join(map(chr, range(0x110000))))
 
 
 def _legal_form_names():
@@ -338,6 +336,14 @@ def _whitespace_run_names():
             "".join(rng.choice(WHITESPACE) for _ in range(length))
             for _ in range(2)
         ]
+        for template in templates:
+            names += [template.format(ws=run) for run in runs]
+    # Past its first 20 characters, a long run keeps only the kinds of
+    # whitespace it holds: every character alone in that part of a
+    # run, and all of them together.
+    middles = WHITESPACE + ["".join(WHITESPACE)]
+    for base in (" ", "\x85"):
+        runs = [base * 20 + middle + base for middle in middles]
         for template in templates:
             names += [template.format(ws=run) for run in runs]
     return names
@@ -394,6 +400,20 @@ def test_normalize_name_output_is_unchanged():
     assert changed == []
 
 
+def test_long_whitespace_runs_shrink_whatever_they_mix():
+    # The legal-form patterns cost the square of each whitespace run
+    # they scan. Shortening once kept one of each character past the
+    # first 20, so runs mixing every kind of whitespace stayed 50 long:
+    # a name of them cost about 2.5 times as much as runs of spaces.
+    every_kind = "".join(WHITESPACE) * 3
+    for length in range(21, len(every_kind) + 1):
+        run = every_kind[:length]
+        shortened = address._RE_LONG_WHITESPACE.sub(
+            address._shorten_whitespace_run, run,
+        )
+        assert len(shortened) <= 24, length
+
+
 #: Hostile names at the 500-character limit.
 HOSTILE_NAMES = {
     "spaces": "A" + " " * 498 + "B",
@@ -405,6 +425,13 @@ HOSTILE_NAMES = {
     "share class then spaces": "Fund class a" + " " * 487 + "x",
     "parenthesis then spaces": "Fund (" + " " * 493 + "x",
     "runs of 21 spaces": (("x" + " " * 21) * 23)[:500],
+    # Runs of 50 characters that hold every kind of whitespace.
+    "runs of every whitespace": (
+        ("x" + ("".join(WHITESPACE) * 2)[:50]) * 10
+    )[:500],
+    # The longest run normalize_name keeps as it is: 20 characters,
+    # one of each kind of whitespace that matters, and the last one.
+    "runs of 24 whitespace": (("x" + " " * 20 + "\n\x85  ") * 20)[:500],
     "commas": "A" + "," * 498 + "B",
     "comma space": "A" + ", " * 249 + "B",
     "space comma": "A" + " ," * 249 + "B",
@@ -424,24 +451,52 @@ def _forget_normalized_names():
     getattr(address.normalize_name, "cache_clear", lambda: None)()
 
 
-def _fast_enough(function, text, limit=0.05, attempts=10):
-    """Whether an uncached call beats ``limit`` within ``attempts``."""
-    # Retrying rides out a busy machine (other test runs can take every
-    # core); the backtracking this guards against was slow every time.
+#: A realistic name at the 500-character limit (normalize_name takes
+#: about 2 ms on it), the yardstick on a busy machine.
+BENIGN_NAME = ("Acme Holding Praha a.s. " * 30)[:500]
+
+
+def _cpu_seconds_per_call(function, text, at_least=0.1):
+    """The CPU time of one uncached call, averaged over a few calls."""
+    # thread_time counts in steps of 15.6 ms on Windows, so it is read
+    # over as many calls as it takes to count ``at_least`` seconds.
+    calls = 0
+    spent = 0.0
+    started = time.thread_time()
+    while spent < at_least:
+        _forget_normalized_names()
+        function(text)
+        calls += 1
+        spent = time.thread_time() - started
+    return spent / calls
+
+
+def _fast_enough(function, text, limit=0.05, slowdown=10, attempts=3):
+    """Whether an uncached call on ``text`` is fast enough."""
+    # A call that ends within ``limit`` is fast. On a busy machine
+    # (other test runs can take every core) a call also waits for a
+    # core and runs on a slower one, so there its CPU time must stay
+    # within ``slowdown`` times that of BENIGN_NAME, which the same
+    # load slows down as much.
     for _ in range(attempts):
         _forget_normalized_names()
         started = time.perf_counter()
         function(text)
         if time.perf_counter() - started < limit:
             return True
-    return False
+    return _cpu_seconds_per_call(function, text) <= (
+        slowdown * _cpu_seconds_per_call(function, BENIGN_NAME)
+    )
 
 
 @pytest.mark.parametrize("label", list(HOSTILE_NAMES))
 def test_normalizers_are_fast_on_hostile_names(label):
     # "A", 498 spaces, "B" took 0.3-1 s per normalize_name call, which
     # the matcher makes about 9 times per candidate: one /run took
-    # minutes. Every call on the lookup path must stay under 50 ms.
+    # minutes. Every call on the lookup path must stay under 50 ms, or
+    # on a busy machine cost at most 10 times as much as BENIGN_NAME
+    # (about 20 ms when idle); the backtracking cost over 100 times as
+    # much.
     text = HOSTILE_NAMES[label]
     assert len(text) == 500
     functions = {
