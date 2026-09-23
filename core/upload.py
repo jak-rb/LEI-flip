@@ -2,21 +2,35 @@
 """Parse an uploaded .xlsx, .csv, .tsv or .txt file into entities.
 
 Columns are read by position, in the order the bulk form documents:
-Name, ISIN, Country, City, Street, Postal code. A first row that looks
-like a header is skipped. Uses openpyxl for .xlsx and the stdlib csv
-module for the text formats, so no extra dependency is needed.
+Name, ISIN, Country, City, Street, Postal code. The first non-blank
+row is skipped when it holds column labels (a header). Uses openpyxl
+for .xlsx and the stdlib csv module for the text formats, so no extra
+dependency is needed.
+
+A row with a name or an ISIN is never dropped or cut short: one with a
+value over its length limit refuses the whole file, with a message
+naming the row. Reading stops as soon as a file is known to hold too
+many entities, and an .xlsx is read within a budget of bytes and XML
+nodes, so a small crafted file cannot tie the server up.
 """
 
 import codecs
 import csv
 import io
+import itertools
 import logging
+import re
+import xml.parsers.expat
+import zipfile
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-from openpyxl import load_workbook
 from openpyxl.chartsheet import Chartsheet
+from openpyxl.reader.excel import ExcelReader
 from pydantic import ValidationError
+from unidecode import unidecode
 
+from .isin import is_valid_isin, normalize_isin
 from .models import InputEntity, InputError
 
 logger = logging.getLogger(__name__)
@@ -27,11 +41,64 @@ MAX_ENTITIES = 100
 #: Columns in the documented order: position -> InputEntity field.
 _COLUMNS = ("name", "isin", "country", "town", "street", "zip_code")
 
-#: First-cell values (lower-cased) that mark a header row to skip.
-_HEADER_CELLS = frozenset({
-    "name", "entity", "entity name", "company", "company name",
-    "issuer", "issuer name", "firma", "nazev", "název",
+#: A row as read from a file: its number as the user sees it there
+#: (1-based, counting the header and blank rows) and its trimmed cells.
+_Row = tuple[int, list[str]]
+
+#: How a message names each column: field -> (English, Czech).
+_FIELD_NAMES = {
+    "name": ("the name", "název"),
+    "isin": ("the ISIN", "ISIN"),
+    "country": ("the country", "země"),
+    "town": ("the city", "město"),
+    "street": ("the street", "ulice"),
+    "zip_code": ("the postal code", "PSČ"),
+}
+
+#: At most this many rows are named in one message.
+_LISTED_ROWS = 5
+
+#: Words the column labels of a header are made of, lower-case and
+#: without diacritics: "Název subjektu", "Legal name",
+#: "PARTY_FULL_NAME", "ISIN kód", "ISIN_IDENT", "Země" and "PSČ" are
+#: all labels. A cell with any other word, such as a company name, is
+#: data.
+_HEADER_WORDS = frozenset({
+    # Name
+    "name", "entity", "company", "legal", "full", "party", "issuer",
+    "firm", "firma", "firmy", "nazev", "subjekt", "subjektu",
+    "obchodni", "jmeno", "emitent", "emitenta", "spolecnost",
+    "spolecnosti", "counterparty", "protistrana", "client", "klient",
+    "customer",
+    # ISIN
+    "isin", "code", "kod", "ident", "identifier",
+    # Address
+    "country", "zeme", "stat", "city", "town", "mesto", "obec",
+    "street", "ulice", "address", "adresa", "addr", "zip", "postal",
+    "postcode", "psc",
 })
+
+#: An ISIN anywhere in a cell, once its spaces are removed.
+_ISIN_SHAPE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
+
+#: Columns read from an .xlsx row whose column A holds a semicolon
+#: line: Excel split the line again at every comma, so rebuilding it
+#: takes the cells after the six documented columns too.
+_LINE_COLUMNS = 50
+
+#: Most an .xlsx may make openpyxl read: bytes unpacked, and XML nodes
+#: (elements and attributes) parsed, counting a part again each time it
+#: is read. A real 100-entity workbook takes under 10,000 nodes, while
+#: a crafted file of a few kilobytes can unpack to gigabytes, hold
+#: millions of tiny elements (openpyxl spends up to some 10
+#: microseconds on each node), or name one part from many places so
+#: that it is parsed again and again.
+_MAX_READ_BYTES = 50 * 1024 * 1024
+_MAX_READ_NODES = 150_000
+
+#: The last row of an Excel worksheet. A row numbered past it is not
+#: from Excel, and would make openpyxl yield every empty row before it.
+_LAST_ROW = 1_048_576
 
 #: Text formats read with the csv module: extension -> delimiter, where
 #: None means detect it. Excel's "Text (Tab delimited)" and "Unicode
@@ -60,7 +127,8 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
 
     Raises:
         InputError: For an empty/unreadable file, an unsupported
-            extension, no usable rows, or more than MAX_ENTITIES rows.
+            extension, no usable rows, more than MAX_ENTITIES rows, or
+            rows with a value over its length limit.
     """
     if not content:
         raise InputError("The file is empty.", "Soubor je prázdný.")
@@ -78,7 +146,6 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
             ".csv, .tsv nebo .txt.",
         )
 
-    rows = _drop_header(rows)
     entities = _rows_to_entities(rows)
     if not entities:
         raise InputError(
@@ -87,35 +154,43 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
             "Nebyly nalezeny žádné subjekty. Každý řádek musí obsahovat "
             "název (první sloupec) nebo ISIN (druhý sloupec).",
         )
-    if len(entities) > MAX_ENTITIES:
-        raise InputError(
-            f"Too many entities ({len(entities)}). The maximum is "
-            f"{MAX_ENTITIES} per file.",
-            f"Příliš mnoho subjektů ({len(entities)}). Maximum je "
-            f"{MAX_ENTITIES} na soubor.",
-        )
     return entities
 
 
-def _read_xlsx(content: bytes) -> list[list[str]]:
-    """Read the active worksheet into rows of trimmed string cells."""
+def _read_xlsx(content: bytes) -> list[_Row]:
+    """Read the active worksheet's entity rows (see _entity_rows)."""
     # The whole read sits in the try: in read-only mode a damaged sheet
     # only fails once its rows are read.
     try:
-        workbook = load_workbook(
-            io.BytesIO(content), read_only=True, data_only=True
-        )
+        workbook = _load_workbook(content)
         sheet = workbook.active
         # Excel saves the sheet on screen as the active one; a chart
         # sheet has no cells, so fall back to the first worksheet.
         if isinstance(sheet, Chartsheet):
             sheet = workbook.worksheets[0]
-        rows = []
-        for raw in sheet.iter_rows(values_only=True):
-            rows.append(["" if cell is None else str(cell) for cell in raw])
+        # Read-only mode stops at the size the sheet states, which some
+        # writers leave stale: the rows past it would be lost.
+        sheet.reset_dimensions()
+        if _holds_semicolon_lines(sheet):
+            rows = _entity_rows(_split_semicolon_lines(sheet))
+        else:
+            rows = _entity_rows(
+                (number, [cell.strip() for cell in cells])
+                for number, cells in _filled_rows(sheet, len(_COLUMNS))
+            )
         workbook.close()
-        if _holds_semicolon_lines(rows):
-            return _split_semicolon_lines(rows)
+    except _TooMuchData:
+        logger.warning("Uploaded .xlsx needs more than the read budget")
+        raise InputError(
+            "The .xlsx file holds too much data to read. Keep only the "
+            f"sheet with the entities (at most {MAX_ENTITIES}), or save "
+            "it as CSV UTF-8.",
+            "Soubor .xlsx obsahuje příliš mnoho dat. Ponechte v něm jen "
+            f"list se subjekty (nejvýše {MAX_ENTITIES}) nebo ho uložte "
+            "jako CSV UTF-8.",
+        ) from None
+    except InputError:
+        raise
     except Exception as error:
         logger.warning("Failed to parse uploaded .xlsx file: %s", error)
         raise InputError(
@@ -123,37 +198,139 @@ def _read_xlsx(content: bytes) -> list[list[str]]:
             "Soubor .xlsx se nepodařilo přečíst. Je to platný soubor "
             "Excelu?",
         ) from error
-    return [[cell.strip() for cell in row] for row in rows]
+    return rows
 
 
-def _holds_semicolon_lines(rows: list[list[str]]) -> bool:
-    """Whether every non-empty row keeps a semicolon line in column A.
+class _TooMuchData(Exception):
+    """An .xlsx made openpyxl read more than the read budget allows.
+
+    Not a ValueError, which openpyxl catches and wraps as its own.
+    """
+
+
+class _GuardedArchive(zipfile.ZipFile):
+    """A zip archive that stops its reader once it has read too much.
+
+    openpyxl may read one part many times over (every sheet entry and
+    chart anchor can name the same one), so every read is charged: the
+    bytes handed out, and the XML nodes in them, counted by an expat
+    parser of its own (openpyxl parses with expat too). A part with a
+    DTD is refused: Office Open XML parts never have one, and its
+    entities could blow a small part up to gigabytes of text.
+    """
+
+    def __init__(self, file) -> None:
+        super().__init__(file)
+        self._bytes_left = _MAX_READ_BYTES
+        self._nodes_left = _MAX_READ_NODES
+
+    def open(self, name, mode="r", pwd=None, **kwargs):
+        """Open a part whose reads are charged to the budget."""
+        info = self.getinfo(name) if isinstance(name, str) else name
+        # Checked up front, as reading a whole part holds it in memory.
+        if info.file_size > self._bytes_left:
+            raise _TooMuchData
+        part = super().open(info, mode, pwd, **kwargs)
+        counter = xml.parsers.expat.ParserCreate()
+        counter.StartElementHandler = self._charge_nodes
+        counter.StartDoctypeDeclHandler = _refuse_doctype
+        read = part.read
+
+        def charged_read(size=-1):
+            nonlocal counter
+            data = read(size)
+            self._bytes_left -= len(data)
+            if self._bytes_left < 0:
+                raise _TooMuchData
+            if counter is not None:
+                try:
+                    counter.Parse(data, not data)
+                except xml.parsers.expat.ExpatError:
+                    # Not XML: openpyxl fails on it too or reads it raw.
+                    counter = None
+            return data
+
+        part.read = charged_read
+        return part
+
+    def _charge_nodes(self, name, attributes) -> None:
+        """Charge one element and its attributes to the budget."""
+        self._nodes_left -= 1 + len(attributes)
+        if self._nodes_left < 0:
+            raise _TooMuchData
+
+
+def _refuse_doctype(*declaration) -> None:
+    """Refuse a part that declares a DTD (see _GuardedArchive)."""
+    raise ValueError("an .xlsx part declares a DTD")
+
+
+def _load_workbook(content: bytes):
+    """Open an .xlsx read-only, its reads guarded by _GuardedArchive.
+
+    Does what openpyxl's load_workbook does, with the archive swapped
+    before anything is read from it.
+    """
+    reader = ExcelReader(
+        io.BytesIO(content), read_only=True, data_only=True,
+        keep_links=False,
+    )
+    reader.archive.close()
+    reader.archive = _GuardedArchive(io.BytesIO(content))
+    reader.read()
+    return reader.wb
+
+
+def _filled_rows(sheet, width: int) -> Iterator[tuple[int, list[str]]]:
+    """Yield (worksheet row number, cells as text) of non-blank rows.
+
+    Reads the first ``width`` columns of every row.
+    """
+    rows = sheet.iter_rows(max_col=width, values_only=True)
+    for number, values in enumerate(rows, start=1):
+        if number > _LAST_ROW:
+            raise ValueError(f"row {number} is past Excel's last row")
+        # Checked on the raw values first, as it is cheap: one stray
+        # far-away cell makes openpyxl yield a million empty rows.
+        if values.count(None) == len(values):
+            continue
+        cells = ["" if cell is None else str(cell) for cell in values]
+        if any(cell.strip() for cell in cells):
+            yield number, cells
+
+
+def _holds_semicolon_lines(sheet) -> bool:
+    """Whether the non-blank rows keep semicolon lines in column A.
 
     That is what Excel shows for a semicolon CSV opened with the comma
     as the delimiter: each whole line lands in column A, split again
-    into the next columns wherever a value holds a comma.
+    into the next columns wherever a value holds a comma. At most a
+    header and MAX_ENTITIES + 1 rows are checked: read as columns, that
+    many rows would be too many entities anyway, so the lines are the
+    one reading left to try.
     """
-    filled = [row for row in rows if any(cell.strip() for cell in row)]
-    return bool(filled) and all(";" in row[0] for row in filled)
+    found = 0
+    for _, cells in _filled_rows(sheet, _LINE_COLUMNS):
+        if ";" not in cells[0]:
+            return False
+        found += 1
+        if found > MAX_ENTITIES + 1:
+            break
+    return found > 0
 
 
-def _split_semicolon_lines(rows: list[list[str]]) -> list[list[str]]:
+def _split_semicolon_lines(sheet) -> Iterator[_Row]:
     """Rebuild each row's original line and split it at semicolons."""
-    result = []
-    for row in rows:
-        cells = list(row)
-        while cells and not cells[-1].strip():
+    for number, cells in _filled_rows(sheet, _LINE_COLUMNS):
+        while not cells[-1].strip():
             cells.pop()
-        if not cells:
-            continue
         # Excel split the line at its commas, so joining the cells with
         # commas restores it (a cell keeps its leading space). Each line
         # is parsed on its own: an unbalanced quote must not swallow
         # the rows after it.
         line = ",".join(cells)
         fields = next(csv.reader([line], delimiter=";"), [])
-        result.append([field.strip() for field in fields])
-    return result
+        yield number, [field.strip() for field in fields]
 
 
 def _decode(content: bytes) -> str:
@@ -171,11 +348,12 @@ def _decode(content: bytes) -> str:
     return content.decode("latin-1")  # latin-1 never fails
 
 
-def _read_csv(content: bytes, delimiter: str | None) -> list[list[str]]:
-    """Read delimited text into rows; a None delimiter is detected.
+def _read_csv(content: bytes, delimiter: str | None) -> list[_Row]:
+    """Read delimited text's entity rows; a None delimiter is detected.
 
     Detection picks whichever of comma, semicolon and tab is most common
-    in the first lines; a tie keeps the comma, then the semicolon.
+    in the first non-blank lines; a tie keeps the comma, then the
+    semicolon.
     """
     text = _decode(content)
     # Text never holds a NUL: this is binary content, such as an Excel
@@ -184,48 +362,161 @@ def _read_csv(content: bytes, delimiter: str | None) -> list[list[str]]:
         logger.warning("Uploaded text file is binary (contains NUL)")
         raise InputError(*_UNREADABLE_TEXT)
     if delimiter is None:
-        sample = "\n".join(text.splitlines()[:5])
+        lines = io.StringIO(text, newline="")
+        sample = "".join(
+            itertools.islice((line for line in lines if line.strip()), 5)
+        )
         delimiter = max((",", ";", "\t"), key=sample.count)
     # newline="" leaves line endings to the csv module, which accepts
     # \n, \r\n and the lone \r of old Mac files alike.
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+    rows = (
+        (number, [cell.strip() for cell in row[:len(_COLUMNS)]])
+        for number, row in enumerate(reader, start=1)
+        if row
+    )
     try:
-        return [[cell.strip() for cell in row] for row in reader]
+        return _entity_rows(rows)
     except csv.Error as error:  # e.g. a cell over the 128 KB limit
         logger.warning("Failed to parse uploaded text file: %s", error)
         raise InputError(*_UNREADABLE_TEXT) from error
 
 
-def _drop_header(rows: list[list[str]]) -> list[list[str]]:
-    """Drop the first row when it looks like a header.
+def _entity_rows(rows: Iterable[_Row]) -> list[_Row]:
+    """Keep the rows that hold a name or an ISIN, cut to the columns.
 
-    Besides the usual labels, a second cell naming the ISIN column in
-    database style (such as ISIN_IDENT) marks a header.
+    Blank rows are skipped, and so is the first non-blank row when it
+    is a header. Reading stops at the first row over MAX_ENTITIES, so a
+    huge file is refused without being read to its end.
+
+    Args:
+        rows: The file's rows, in order.
+
+    Returns:
+        The rows to build entities from.
+
+    Raises:
+        InputError: When more than MAX_ENTITIES rows hold an entity.
     """
-    if not rows or not rows[0]:
-        return rows
-    first = rows[0][0].strip().lower()
-    second = rows[0][1].strip().lower() if len(rows[0]) > 1 else ""
-    if first in _HEADER_CELLS or "isin" in second:
-        return rows[1:]
-    return rows
+    kept = []
+    header_checked = False
+    for number, cells in rows:
+        cells = cells[:len(_COLUMNS)]
+        if not any(cells):
+            continue
+        if not header_checked:
+            header_checked = True
+            if _is_header(cells):
+                continue
+        # Counted before validation: an invalid row counts toward the
+        # cap too, and "too many" is then the error to show.
+        if not any(cells[:2]):
+            continue
+        kept.append((number, cells))
+        if len(kept) > MAX_ENTITIES:
+            raise InputError(
+                f"Too many entities (more than {MAX_ENTITIES}). The "
+                f"maximum is {MAX_ENTITIES} per file.",
+                f"Příliš mnoho subjektů (více než {MAX_ENTITIES}). "
+                f"Maximum je {MAX_ENTITIES} na soubor.",
+            )
+    return kept
 
 
-def _rows_to_entities(rows: list[list[str]]) -> list[InputEntity]:
-    """Map positional columns to entities, skipping empty/invalid rows."""
+def _is_header(cells: list[str]) -> bool:
+    """Whether a row holds column labels rather than an entity.
+
+    The name or the ISIN cell must be a label, or most filled cells
+    must: a city or a street may be named like a label (Clarks is in
+    Street, Somerset), so the address cells only count together.
+    """
+    name = cells[0]
+    isin = cells[1] if len(cells) > 1 else ""
+    # A company may be named like a label, but a real ISIN beside the
+    # name shows the row is data.
+    if is_valid_isin(normalize_isin(isin)):
+        return False
+    if _is_label(name) or _is_label(isin) or _is_isin_label(isin):
+        return True
+    filled = [cell for cell in cells if cell]
+    return sum(_is_label(cell) for cell in filled) * 2 > len(filled)
+
+
+def _is_label(cell: str) -> bool:
+    """Whether a cell is a column label, such as "ISIN kód"."""
+    words = _words(cell)
+    return bool(words) and all(word in _HEADER_WORDS for word in words)
+
+
+def _is_isin_label(cell: str) -> bool:
+    """Whether an ISIN cell is a label, such as "ISIN (optional)"."""
+    words = _words(cell)
+    return (
+        bool(words) and words[0].startswith("isin")
+        and not _ISIN_SHAPE.search(normalize_isin(cell))
+    )
+
+
+def _words(cell: str) -> list[str]:
+    """A cell's words, lower-case and without diacritics."""
+    return re.findall(r"[a-z0-9]+", unidecode(cell).lower())
+
+
+def _rows_to_entities(rows: list[_Row]) -> list[InputEntity]:
+    """Map positional columns to one entity per row.
+
+    Raises:
+        InputError: Naming the rows with a value over its length limit
+            (precision first: a value is never cut short to fit).
+    """
     entities: list[InputEntity] = []
-    for row in rows:
+    too_long: list[tuple[int, list[tuple[str, int]]]] = []
+    for number, row in rows:
         values = {}
         for index, field in enumerate(_COLUMNS):
             cell = row[index].strip() if index < len(row) else ""
             values[field] = cell or None
-        # Keep a row that has a name or an ISIN; skip only when both are
-        # missing. InputEntity enforces the same name-or-ISIN rule.
-        if not values["name"] and not values["isin"]:
-            continue
         try:
             entities.append(InputEntity(**values))
-        except ValidationError:
-            continue  # skip a row that fails validation (e.g. oversized)
+        except ValidationError as error:
+            # Each row has a name or an ISIN and only text values, so a
+            # length limit is the one check it can fail.
+            limits = {
+                issue["loc"][0]: issue["ctx"]["max_length"]
+                for issue in error.errors()
+            }
+            too_long.append((number, [
+                (field, limits[field]) for field in _COLUMNS
+                if field in limits
+            ]))
+    if too_long:
+        raise _too_long_error(too_long)
     return entities
+
+
+def _too_long_error(
+    rows: list[tuple[int, list[tuple[str, int]]]]
+) -> InputError:
+    """The error naming the rows that have a value over its limit."""
+    english, czech = [], []
+    for number, limits in rows[:_LISTED_ROWS]:
+        english.append(f"Row {number}: " + "; ".join(
+            f"{_FIELD_NAMES[field][0]} is longer than {limit} characters"
+            for field, limit in limits
+        ) + ".")
+        czech.append(f"Řádek {number}: " + "; ".join(
+            f"{_FIELD_NAMES[field][1]} je delší než {limit} znaků"
+            for field, limit in limits
+        ) + ".")
+    more = len(rows) - _LISTED_ROWS
+    if more > 0:
+        english.append(f"And {more} more row{'s' if more > 1 else ''}.")
+        if more == 1:
+            more_cs = "další řádek"
+        elif more < 5:
+            more_cs = "další řádky"
+        else:
+            more_cs = "dalších řádků"
+        czech.append(f"A ještě {more} {more_cs}.")
+    return InputError(" ".join(english), " ".join(czech))
 
