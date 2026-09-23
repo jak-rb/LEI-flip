@@ -3,9 +3,9 @@
 
 Columns are read by position, in the order the bulk form documents:
 Name, ISIN, Country, City, Street, Postal code. The first non-blank
-row is skipped when it holds column labels (a header). Uses openpyxl
-for .xlsx and the stdlib csv module for the text formats, so no extra
-dependency is needed.
+row is skipped when it holds column labels (a header), and so is a
+title row above a header. Uses openpyxl for .xlsx and the stdlib csv
+module for the text formats, so no extra dependency is needed.
 
 A row with a name or an ISIN is never dropped or cut short: one with a
 value over its length limit refuses the whole file, with a message
@@ -30,6 +30,7 @@ from openpyxl.utils.escape import unescape
 from pydantic import ValidationError
 from unidecode import unidecode
 
+from .address import country_to_iso
 from .isin import is_valid_isin, normalize_isin
 from .models import InputEntity, InputError, is_blank
 
@@ -77,6 +78,10 @@ _HEADER_WORDS = frozenset({
     "street", "ulice", "address", "adresa", "addr", "zip", "postal",
     "postcode", "psc",
 })
+
+#: A note in parentheses, such as "(optional)" in "ISIN (optional)":
+#: it says how to fill a column, not what the column is.
+_LABEL_NOTE = re.compile(r"\([^)]*\)")
 
 #: An ISIN anywhere in a cell, once its spaces are removed.
 _ISIN_SHAPE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
@@ -378,42 +383,67 @@ def _postal_code_text(cell, text: str) -> str:
 
 
 def _holds_semicolon_lines(sheet) -> bool:
-    """Whether the non-blank rows keep semicolon lines in column A.
+    """Whether the non-blank rows are semicolon lines split by Excel.
 
     That is what Excel shows for a semicolon CSV opened with the comma
     as the delimiter: each whole line lands in column A, split again
-    into the next columns wherever a value holds a comma. At most a
-    header and MAX_ENTITIES + 1 rows are checked: read as columns, that
-    many rows would be too many entities anyway, so the lines are the
-    one reading left to try.
+    into the next columns wherever a value holds a comma, even one in
+    the name ("ČEZ, a. s."). So each row's line is rebuilt first (see
+    _line_fields). Every line must hold a semicolon, and on more than
+    half of them the second field must be empty, an ISIN or a label,
+    as the documented layout has it: a plain sheet whose names hold a
+    semicolon ("Apple; Inc" beside its ISIN) is read as columns. At
+    most a header and MAX_ENTITIES + 1 rows are checked: read as
+    columns, that many rows would be too many entities anyway, so the
+    lines are the one reading left to try.
     """
-    found = 0
+    checked = laid_out = 0
+    decoded: dict[str, str] = {}
     for _, cells in _filled_rows(sheet, _LINE_COLUMNS):
-        if ";" not in cells[0]:
+        # Joining the cells with commas adds no semicolon.
+        if not any(";" in cell for cell in cells):
             return False
-        found += 1
-        if found > MAX_ENTITIES + 1:
+        fields = _line_fields(cells)
+        # Decoded, and empty when invisible, as the entity rows see it.
+        second = (
+            _decode_escapes(fields[1], decoded) if len(fields) > 1 else ""
+        )
+        if (
+            is_blank(second) or _is_label(second) or _is_isin_label(second)
+            or _ISIN_SHAPE.fullmatch(normalize_isin(second))
+        ):
+            laid_out += 1
+        checked += 1
+        if checked > MAX_ENTITIES + 1:
             break
-    return found > 0
+    return laid_out * 2 > checked
 
 
 def _split_semicolon_lines(sheet) -> Iterator[_Row]:
     """Rebuild each row's original line and split it at semicolons."""
     decoded: dict[str, str] = {}
     for number, cells in _filled_rows(sheet, _LINE_COLUMNS):
-        while not cells[-1].strip():
-            cells.pop()
-        # Excel split the line at its commas, so joining the cells with
-        # commas restores it (a cell keeps its leading space). Each line
-        # is parsed on its own: an unbalanced quote must not swallow
-        # the rows after it. Escapes are decoded only in the fields: a
-        # line break decoded before would stand outside any quotes,
-        # which the csv module refuses.
-        line = ",".join(cells)
-        fields = next(csv.reader([line], delimiter=";"), [])
+        # Escapes are decoded only in the fields: a line break decoded
+        # before would stand outside any quotes, which the csv module
+        # refuses.
         yield number, [
-            _decode_escapes(field, decoded).strip() for field in fields
+            _decode_escapes(field, decoded).strip()
+            for field in _line_fields(cells)
         ]
+
+
+def _line_fields(cells: list[str]) -> list[str]:
+    """A row's original line, rebuilt and split at its semicolons.
+
+    Excel split the line at its commas, so joining the cells with
+    commas restores it (a cell keeps its leading space). Each line is
+    parsed on its own: an unbalanced quote must not swallow the rows
+    after it. Escapes are left in the fields (see _decode_escapes).
+    """
+    while not cells[-1].strip():
+        cells.pop()
+    line = ",".join(cells)
+    return next(csv.reader([line], delimiter=";"), [])
 
 
 def _decode(content: bytes) -> str:
@@ -438,10 +468,9 @@ def _decode(content: bytes) -> str:
     text = content.decode("utf-8-sig", errors="replace")
     if _is_mostly_utf8(text):
         return text
-    try:
-        return content.decode("cp1250")
-    except UnicodeDecodeError:
-        return content.decode("latin-1")  # latin-1 never fails
+    # The five bytes cp1250 leaves undefined become U+FFFD: read as
+    # latin-1 instead, every Czech letter in the file would be garbled.
+    return content.decode("cp1250", errors="replace")
 
 
 def _is_mostly_utf8(text: str) -> bool:
@@ -495,9 +524,10 @@ def _read_csv(content: bytes, delimiter: str | None) -> list[_Row]:
 def _entity_rows(rows: Iterable[_Row]) -> list[_Row]:
     """Keep the rows that hold a name or an ISIN, cut to the columns.
 
-    Blank rows are skipped, and so is the first non-blank row when it
-    is a header. Reading stops at the first row over MAX_ENTITIES, so a
-    huge file is refused without being read to its end.
+    Blank rows are skipped, and so are a header and a title row above
+    it (see _after_header). Reading stops at the first row over
+    MAX_ENTITIES, so a huge file is refused without being read to its
+    end.
 
     Args:
         rows: The file's rows, in order.
@@ -509,25 +539,7 @@ def _entity_rows(rows: Iterable[_Row]) -> list[_Row]:
         InputError: When more than MAX_ENTITIES rows hold an entity.
     """
     kept = []
-    header_checked = False
-    # Whether each name or ISIN text is blank: one .xlsx shared string
-    # can fill any number of cells, and such a row is not counted.
-    blank: dict[str, bool] = {}
-    for number, cells in rows:
-        cells = cells[:len(_COLUMNS)]
-        # A name or ISIN with no visible character, such as a lone
-        # zero-width space, is as empty as it looks.
-        for index, cell in enumerate(cells[:2]):
-            if cell not in blank:
-                blank[cell] = is_blank(cell)
-            if blank[cell]:
-                cells[index] = ""
-        if not any(cells):
-            continue
-        if not header_checked:
-            header_checked = True
-            if _is_header(cells):
-                continue
+    for number, cells in _after_header(_non_blank_rows(rows)):
         # Counted before validation: an invalid row counts toward the
         # cap too, and "too many" is then the error to show.
         if not any(cells[:2]):
@@ -543,28 +555,106 @@ def _entity_rows(rows: Iterable[_Row]) -> list[_Row]:
     return kept
 
 
+def _non_blank_rows(rows: Iterable[_Row]) -> Iterator[_Row]:
+    """The rows with a filled cell, cut to the columns."""
+    # Whether each name or ISIN text is blank: one .xlsx shared string
+    # can fill any number of cells, and such a row is not counted.
+    blank: dict[str, bool] = {}
+    for number, cells in rows:
+        cells = cells[:len(_COLUMNS)]
+        # A name or ISIN with no visible character, such as a lone
+        # zero-width space, is as empty as it looks.
+        for index, cell in enumerate(cells[:2]):
+            if cell not in blank:
+                blank[cell] = is_blank(cell)
+            if blank[cell]:
+                cells[index] = ""
+        if any(cells):
+            yield number, cells
+
+
+def _after_header(rows: Iterator[_Row]) -> Iterator[_Row]:
+    """The non-blank rows, less a first row that is a header.
+
+    A first row of one filled cell may be a title ("Seznam subjektů")
+    above the header: it is skipped with the next row when that is a
+    header of two labels or more. Otherwise the first row is data, so
+    a list of names keeps its first name whatever the second is.
+    """
+    first = next(rows, None)
+    if first is None or _is_header(first[1]):
+        yield from rows
+        return
+    second = None
+    if sum(1 for cell in first[1] if cell) == 1:
+        second = next(rows, None)
+        if (
+            second is not None and _is_header(second[1])
+            and sum(_labels(second[1])) >= 2
+        ):
+            yield from rows
+            return
+    yield first
+    if second is not None:
+        yield second
+    yield from rows
+
+
 def _is_header(cells: list[str]) -> bool:
     """Whether a row holds column labels rather than an entity.
 
-    The name or the ISIN cell must be a label, or most filled cells
-    must: a city or a street may be named like a label (Clarks is in
-    Street, Somerset), so the address cells only count together.
+    A company may be named like labels ("Party City", "Client
+    Company"), so a row whose ISIN is valid, or with a cell that looks
+    like data (see _looks_like_data), is never a header. Otherwise the
+    name and the ISIN cells must each be empty or a label, one of them
+    a label, or most filled cells must be labels: a city or a street
+    may be named like a label (Clarks is in Street, Somerset), so the
+    address cells only count together.
     """
-    name = cells[0]
     isin = cells[1] if len(cells) > 1 else ""
-    # A company may be named like a label, but a real ISIN beside the
-    # name shows the row is data.
     if is_valid_isin(normalize_isin(isin)):
         return False
-    if _is_label(name) or _is_label(isin) or _is_isin_label(isin):
+    labels = _labels(cells)
+    if any(
+        cell and not label and _looks_like_data(cell)
+        for cell, label in zip(cells, labels)
+    ):
+        return False
+    if any(labels[:2]) and all(
+        label or not cell for cell, label in zip(cells[:2], labels[:2])
+    ):
         return True
-    filled = [cell for cell in cells if cell]
-    return sum(_is_label(cell) for cell in filled) * 2 > len(filled)
+    filled = [label for cell, label in zip(cells, labels) if cell]
+    return sum(filled) * 2 > len(filled)
+
+
+def _labels(cells: list[str]) -> list[bool]:
+    """Which cells are labels; the ISIN cell's may be worded freely."""
+    labels = [_is_label(cell) for cell in cells]
+    if len(cells) > 1 and _is_isin_label(cells[1]):
+        labels[1] = True
+    return labels
+
+
+def _looks_like_data(cell: str) -> bool:
+    """Whether a cell holds a digit or a country (name or code).
+
+    A postal code, a street number and an ISIN hold digits, and
+    country_to_iso knows a country's name and passes a two-letter code
+    through. Label cells ("Země", "Country") are not checked.
+    """
+    return (
+        any(char.isdigit() for char in cell)
+        or country_to_iso(cell) is not None
+    )
 
 
 def _is_label(cell: str) -> bool:
-    """Whether a cell is a column label, such as "ISIN kód"."""
-    words = _words(cell)
+    """Whether a cell is a column label, such as "ISIN kód".
+
+    A note in parentheses is left out: "Name (required)" is a label.
+    """
+    words = _words(_LABEL_NOTE.sub(" ", cell))
     return bool(words) and all(word in _HEADER_WORDS for word in words)
 
 
