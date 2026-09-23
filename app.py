@@ -14,9 +14,11 @@ import logging
 import math
 import secrets
 import time
+import unicodedata
 
 from flask import (
     Flask,
+    Request,
     Response,
     abort,
     jsonify,
@@ -61,6 +63,36 @@ app.jinja_env.finalize = lambda value: "" if value is None else value
 # so the limit sits just under that.
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024  # 4 MiB
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+
+
+class _UploadCapRequest(Request):
+    """Flask's request, with form fields allowed up to the upload cap.
+
+    Werkzeug refuses a form field (or a urlencoded body) over 500 kB
+    with a 413 far below MAX_UPLOAD_BYTES, and Flask 3.0 has no config
+    key for that limit. Werkzeug's cap of 1000 form parts stays: the
+    page sends at most seven, so only a crafted request gets past it.
+    """
+
+    max_form_memory_size = MAX_UPLOAD_BYTES
+
+
+app.request_class = _UploadCapRequest
+
+
+@app.errorhandler(413)
+def request_too_large(error):
+    """Refuse an oversized request with a JSON error the page can show.
+
+    Covers a body over MAX_UPLOAD_BYTES and more form parts than
+    Werkzeug parses. Vercel's own limit (bodies over 4.5 MB) answers
+    before the app runs, with plain text.
+    """
+    return {
+        "error": "The request is too large (max 4 MB).",
+        "error_cs": "Požadavek je příliš velký (max. 4 MB).",
+    }, 413
+
 
 # Allowed bulk-upload extensions. The browser checks this too, but a
 # request can reach the server without going through our JavaScript,
@@ -200,14 +232,31 @@ def _progress(search: dict) -> dict:
     }
 
 
+def _form_value(key: str) -> str | None:
+    """A single-form field without surrounding whitespace, or None."""
+    return (request.form.get(key) or "").strip() or None
+
+
+def _none_if_invisible(value: str | None) -> str | None:
+    """None for a value of only whitespace and format characters."""
+    # Format characters (category Cf: U+200B, U+FEFF, ...) are
+    # invisible, so a field holding only them looks empty to the user.
+    if value and all(
+        char.isspace() or unicodedata.category(char) == "Cf"
+        for char in value
+    ):
+        return None
+    return value
+
+
 def _single_entities() -> list[InputEntity]:
     """The one entity of the single-lookup form.
 
     Raises:
         InputError: With the message to show when the input is unusable.
     """
-    name = request.form.get("entity_name", "").strip()
-    isin = request.form.get("isin") or None
+    name = _none_if_invisible(_form_value("entity_name"))
+    isin = _none_if_invisible(_form_value("isin"))
     if not name and not isin:
         raise InputError(
             "Please enter an entity name or an ISIN.",
@@ -217,10 +266,10 @@ def _single_entities() -> list[InputEntity]:
         entity = InputEntity(
             name=name,
             isin=isin,
-            street=request.form.get("street") or None,
-            town=request.form.get("city") or None,
-            country=request.form.get("country") or None,
-            zip_code=request.form.get("postal_code") or None,
+            street=_form_value("street"),
+            town=_form_value("city"),
+            country=_form_value("country"),
+            zip_code=_form_value("postal_code"),
         )
     except ValidationError as error:
         raise InputError(

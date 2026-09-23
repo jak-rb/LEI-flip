@@ -217,17 +217,18 @@ async function submitSearch(form, formData) {
             method: "POST",
             body: formData,
         });
-        // 413 is the size cap rejecting a large upload (Flask's
-        // MAX_CONTENT_LENGTH, or Vercel's own request body limit).
-        if (response.status === 413) {
-            showFormError(form, t("tooLarge"));
-            return;
-        }
         let data = null;
         try {
             data = await response.json();
         } catch (error) {
             data = null;
+        }
+        // 413 is a size limit refusing the request: the app's own reply
+        // is JSON with the message to show, while Vercel's request body
+        // limit (4.5 MB) answers before the app with plain text.
+        if (response.status === 413) {
+            showFormError(form, serverError(data) || t("tooLarge"));
+            return;
         }
         if (!response.ok || !data || !data.job_id) {
             showFormError(form, serverError(data) || t("couldNotStart"));

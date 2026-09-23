@@ -1,5 +1,8 @@
 # Runtime dependencies (installed by Vercel's Python build and locally).
 Flask==3.0.3
+# Pinned, not left to Flask's range: app.py raises its request class's
+# max_form_memory_size, a Werkzeug attribute.
+Werkzeug==3.1.8
 requests==2.32.3
 openpyxl==3.1.5
 pydantic==2.13.4
