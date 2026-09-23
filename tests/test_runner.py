@@ -97,7 +97,7 @@ def clock(monkeypatch):
 
 @pytest.fixture
 def session(monkeypatch, clock):
-    """The fake HTTP session every real GleifClient gets (GLEIF: empty)."""
+    """The fake HTTP session of each GleifClient (GLEIF: empty)."""
     fake = _FakeSession(lambda params, timeout: _response())
     monkeypatch.setattr(gleif.requests, "Session", lambda: fake)
     monkeypatch.setattr(openfigi.requests, "post", _no_openfigi)

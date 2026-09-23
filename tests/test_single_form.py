@@ -5,7 +5,8 @@ The single form's fields are trimmed and an invisible-only name or
 ISIN counts as empty; the ISIN's country prefix reaches GLEIF only as
 two ASCII letters; oversized requests get a JSON 413 while form
 fields may use the whole upload cap; and GLEIF refusing access (401,
-403, 407) counts as GLEIF being unavailable, not as one bad query.
+403, 407) to every request counts as GLEIF being unavailable, not as
+one bad query.
 Nothing here touches the network: lookups, GLEIF's HTTP session and
 OpenFIGI are faked.
 """
@@ -24,12 +25,7 @@ import requests
 import app as app_module
 from core import gleif, openfigi, storage
 from core import isin as core_isin, lookup as core_lookup
-from core.gleif import (
-    GleifApiError,
-    GleifClient,
-    GleifQueryError,
-    GleifServerError,
-)
+from core.gleif import GleifClient, GleifQueryError
 from core.isin import is_valid_isin
 from core.models import InputEntity, LookupResult
 
@@ -429,16 +425,15 @@ def session(monkeypatch):
 
 
 @pytest.mark.parametrize("status", [401, 403, 407])
-def test_gleif_denying_access_is_gleif_unavailable(session, status):
+def test_gleif_denying_access_is_not_asked_again(session, status):
     session.handler = lambda params: _response(status)
     with GleifClient() as gleif_client:
-        with pytest.raises(GleifApiError) as raised:
+        with pytest.raises(GleifQueryError) as raised:
             gleif_client.search_by_name("Alpha a.s.")
-    assert not isinstance(
-        raised.value, (GleifQueryError, GleifServerError),
-    )
     assert f"HTTP {status}" in str(raised.value)
-    # Asking again at once would only be denied again.
+    # Asking again at once would only be denied again. Whether GLEIF
+    # denies this query or every request, the job runner asks GLEIF
+    # itself (see tests/test_runner_outage.py).
     assert len(session.calls) == 1
 
 
@@ -455,11 +450,15 @@ def test_gleif_denying_access_answers_503_and_keeps_the_entity(
     monkeypatch, session, status,
 ):
     monkeypatch.setattr(app_module, "RUN_CHUNK_SIZE", 5)
-    session.handler = lambda params: (
-        _response(status)
-        if any("Denied" in str(value) for value in params.values())
-        else _response()
-    )
+    # From Denied on, GLEIF denies the app every request, the runner's
+    # check whether GLEIF answers at all included.
+    denied = {"on": False}
+
+    def handler(params):
+        if any("Denied" in str(value) for value in params.values()):
+            denied["on"] = True
+        return _response(status) if denied["on"] else _response()
+    session.handler = handler
     app_module.app.config["TESTING"] = True
     client = app_module.app.test_client()
     content = b"Alpha a.s.,,CZ\nDenied a.s.,,CZ\nGamma a.s.,,CZ"

@@ -34,6 +34,15 @@ INITIAL_BACKOFF = 1.0
 #: longer (or absurd) value is cut to this, so it stays a sane number.
 MAX_RETRY_AFTER = 300.0
 
+# 4xx statuses that report a passing state (Request Timeout, Too
+# Early) rather than a refused query, so they are retried like a
+# server error.
+_TRANSIENT_CLIENT_ERRORS = (408, 425)
+
+# The query of GleifClient.is_answering: a full-text search like the
+# first one of every name search, for a single record.
+_PROBE_PARAMS = {"filter[fulltext]": "GLEIF", "page[size]": "1"}
+
 # Strategy-3 abbreviation expansions, applied before a legalName search.
 _RE_LMT = re.compile(r"\bLmt\.?\b", re.IGNORECASE)
 _RE_CORP = re.compile(r"\bCorp\.?\b", re.IGNORECASE)
@@ -57,16 +66,18 @@ class GleifApiError(Exception):
 class GleifServerError(GleifApiError):
     """GLEIF kept answering with a server error or an unreadable body.
 
-    GLEIF itself is reachable here, so the fault may lie with this one
-    query rather than with the whole service.
+    A server error is a 5xx, 408 or 425. GLEIF itself is reachable
+    here, so the fault may lie with this one query rather than with
+    the whole service; GleifClient.is_answering tells which.
     """
 
 
 class GleifQueryError(GleifApiError):
-    """GLEIF refused the query itself (a 4xx but 401, 403, 407, 429).
+    """GLEIF refused the query (a 4xx other than 408, 425 or 429).
 
-    Asking again cannot help: the problem is this query, not the
-    service.
+    Asking again at once cannot help. The refusal may be of this one
+    query, or of every request (a block of the app, a moved API);
+    GleifClient.is_answering tells which.
     """
 
 
@@ -103,13 +114,15 @@ def _retry_after(resp: requests.Response, default: float) -> float:
     # Latin-1 superscript two.
     if value.isascii() and value.isdigit():
         return min(float(value), MAX_RETRY_AFTER)
+    # A date with an out-of-range year, second or zone offset makes
+    # the parser raise OverflowError rather than ValueError.
     try:
         when = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        seconds = (when - datetime.now(timezone.utc)).total_seconds()
+    except (TypeError, ValueError, OverflowError):
         return default
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    seconds = (when - datetime.now(timezone.utc)).total_seconds()
     return min(max(seconds, 0.0), MAX_RETRY_AFTER)
 
 
@@ -197,13 +210,16 @@ class GleifClient:
             retry starts after it, and each request's timeout is cut
             to the time left, so the caller's time limit holds even
             when GLEIF is slow. None (the default) means no deadline.
+        rate_limit_waits: The seconds of each rate-limit wait (a 429's
+            Retry-After) the client slept, oldest first. The caller
+            may empty it, as the job runner does before each lookup,
+            to see the waits of one lookup alone.
     """
 
     def __init__(self, timeout: float = REQUEST_TIMEOUT):
         self._timeout = timeout
         self.deadline: Optional[float] = None
-        # The last Retry-After this client waited out (see _cut_off).
-        self._rate_limit_wait: Optional[float] = None
+        self.rate_limit_waits: list[float] = []
         self._session = requests.Session()
         self._session.headers.update({"Accept": "application/vnd.api+json"})
 
@@ -226,56 +242,54 @@ class GleifClient:
     def _cut_off(self) -> Exception:
         """The error for running out of time before a request is done.
 
-        Running out after waiting out a rate limit counts as being
-        rate-limited, so the caller pauses rather than taking the
-        lookup for a slow one.
+        Whether the time went on waiting out rate limits is the
+        caller's to judge, from ``rate_limit_waits``.
         """
-        if self._rate_limit_wait is not None:
-            return GleifRateLimited(self._rate_limit_wait)
         return DeadlineExceeded("GLEIF request cut off by the deadline")
 
     def _pause(self, seconds: float) -> None:
-        """Sleep before a retry, unless the deadline would pass first."""
+        """Sleep before a retry unless the deadline comes first."""
         if seconds >= self._time_left():
             raise self._cut_off()
         time.sleep(seconds)
 
-    def _request(self, path: str, params: dict) -> dict:
+    def _request(
+        self, path: str, params: dict, attempts: int = MAX_RETRIES
+    ) -> dict:
         """GET ``path`` with retry and exponential backoff.
 
-        Retries transport errors and server errors (HTTP 5xx, or a body
-        that is not a JSON object) after a doubling backoff, and a rate
-        limit (HTTP 429) after the wait its Retry-After asks for. Any
-        other 4xx is not retried, and one refusing access (401, 403,
-        407) counts as GLEIF being unavailable. Every GLEIF failure is
-        raised as a GleifApiError or one of its subclasses, so callers
-        have a single exception type to catch. No attempt or retry
-        starts after the deadline, and each attempt's timeout is cut to
-        the time left.
+        Retries transport errors and server errors (HTTP 5xx, 408 and
+        425, or a body that is not a JSON object) after a doubling
+        backoff, and a rate limit (HTTP 429) after the wait its
+        Retry-After asks for. Any other 4xx is not retried. Every GLEIF
+        failure is raised as a GleifApiError or one of its subclasses,
+        so callers have a single exception type to catch. No attempt
+        or retry starts after the deadline, and each attempt's timeout
+        is cut to the time left.
 
         Args:
             path: API path appended to the GLEIF base URL.
             params: Query-string parameters.
+            attempts: How many times the request is sent at most.
 
         Returns:
             The parsed JSON response body.
 
         Raises:
-            GleifQueryError: If GLEIF refuses the query (a 4xx but
-                401, 403, 407 or 429).
+            GleifQueryError: If GLEIF refuses the query (a 4xx other
+                than 408, 425 or 429).
             GleifServerError: If GLEIF keeps answering with a server
                 error or a body that is not a JSON object.
             GleifRateLimited: If GLEIF keeps rate-limiting, or the wait
                 it asks for does not fit before the deadline.
-            GleifApiError: If GLEIF stays unreachable or denies access
-                (HTTP 401, 403 or 407).
+            GleifApiError: If GLEIF stays unreachable.
             DeadlineExceeded: If the deadline comes first.
         """
         url = GLEIF_BASE_URL + path
         backoff = INITIAL_BACKOFF
 
-        for attempt in range(MAX_RETRIES):
-            last = attempt == MAX_RETRIES - 1
+        for attempt in range(attempts):
+            last = attempt == attempts - 1
             time_left = self._time_left()
             if time_left <= 0:
                 raise self._cut_off()
@@ -307,31 +321,25 @@ class GleifClient:
                     raise GleifRateLimited(wait)
                 logger.warning(
                     "GLEIF rate limited; retrying in %.1fs (attempt %d/%d)",
-                    wait, attempt + 1, MAX_RETRIES,
+                    wait, attempt + 1, attempts,
                 )
-                self._rate_limit_wait = wait
+                self.rate_limit_waits.append(wait)
                 time.sleep(wait)
                 backoff *= 2
                 continue
 
-            if status in (401, 403, 407):
-                # Access itself is refused (credentials, a block, a
-                # proxy): every query would meet the same, so GLEIF
-                # counts as unavailable and the job waits instead of
-                # failing this entity. Asking again at once cannot
-                # help either.
-                raise GleifApiError(
-                    f"GLEIF API denied access: HTTP {status}"
-                )
-            if 400 <= status < 500:
+            if (
+                400 <= status < 500
+                and status not in _TRANSIENT_CLIENT_ERRORS
+            ):
                 raise GleifQueryError(
                     f"GLEIF API refused the query: HTTP {status}"
                 )
-            data = _json_object(resp) if status < 500 else None
+            data = _json_object(resp) if status < 400 else None
             if data is not None:
                 return data
             problem = (
-                f"HTTP {status}" if status >= 500
+                f"HTTP {status}" if status >= 400
                 else "a body that is not a JSON object"
             )
             if last:
@@ -345,6 +353,31 @@ class GleifClient:
 
         # The loop always returns or raises; this guards a logic slip.
         raise GleifApiError("GLEIF API request failed")
+
+    def is_answering(self) -> bool:
+        """Whether GLEIF answers a plain search right now.
+
+        Sends one small full-text search, the kind every name search
+        starts with, and does not retry it. After a query failed, this
+        tells a failure of that query (GLEIF answers here) from GLEIF
+        failing every request: an outage, a block of the app, a moved
+        API.
+
+        Returns:
+            True if GLEIF answered it with a JSON object.
+
+        Raises:
+            GleifRateLimited: If GLEIF answers with a rate limit, which
+                tells nothing about the failed query.
+            DeadlineExceeded: If the deadline comes first.
+        """
+        try:
+            self._request("/lei-records", _PROBE_PARAMS, attempts=1)
+        except GleifRateLimited:
+            raise
+        except GleifApiError:
+            return False
+        return True
 
     def search_by_name(
         self,
