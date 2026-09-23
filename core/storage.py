@@ -103,6 +103,23 @@ class _Connection:
             return self._raw.execute(sql.replace("%s", "?"), params)
         return self._raw.execute(sql, params or None)
 
+    def begin_write(self) -> None:
+        """Start a read-modify-write that holds the write lock.
+
+        On SQLite, ``BEGIN IMMEDIATE`` takes the write lock before the
+        read, so rival writers queue behind it and the compare-and-swap
+        cannot miss. Without it every miss was a write transaction of
+        its own, and a burst of simultaneous writers made some wait
+        past the busy timeout ("database is locked"). On Postgres this
+        sends nothing: psycopg opens the transaction with the first
+        statement, and an UPDATE that meets a rival's uncommitted write
+        waits on the row lock, then checks the compare-and-swap's WHERE
+        against the row the rival committed, so there a miss never
+        writes over the rival's change.
+        """
+        if self._sqlite:
+            self._raw.execute("BEGIN IMMEDIATE")
+
     def fetchone(self, sql: str, params: tuple = ()) -> Optional[dict]:
         """Run a query and return its first row as a dict, or None."""
         row = self.execute(sql, params).fetchone()
@@ -288,7 +305,9 @@ def record_decision(
     results are still exactly the text this call read; otherwise the
     call reads again and retries. A decision therefore never overwrites
     a rival decision on another row, or rows a /run appended, with its
-    older copy of the results.
+    older copy of the results. On SQLite the read and the write run
+    under one write lock (``begin_write``), so there the swap never
+    misses.
 
     Args:
         job_id: The search's id.
@@ -305,6 +324,7 @@ def record_decision(
         return None
     with _connect() as conn:
         for _ in range(_DECISION_ATTEMPTS):
+            conn.begin_write()
             stored = conn.fetchone(
                 "SELECT query, results FROM searches WHERE job_id = %s",
                 (job_id,),
@@ -359,7 +379,9 @@ def record_failed_attempt(job_id: str, index: int) -> Optional[int]:
     a compare-and-swap on the stored query text, so it is atomic on
     both backends: when a racing request changed the query since it
     was read, this attempt is not counted rather than written over
-    the rival's newer count.
+    the rival's newer count. On SQLite the read and the write run
+    under one write lock (``begin_write``), so no rival can come
+    between them.
 
     Args:
         job_id: The search's id.
@@ -371,6 +393,7 @@ def record_failed_attempt(job_id: str, index: int) -> Optional[int]:
         request's count won.
     """
     with _connect() as conn:
+        conn.begin_write()
         data = conn.fetchone(
             "SELECT query FROM searches WHERE job_id = %s", (job_id,)
         )

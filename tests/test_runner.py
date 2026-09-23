@@ -377,6 +377,9 @@ def test_racing_failure_counts_are_never_lost(client, monkeypatch):
             rivals.append(storage.record_failed_attempt(job_id, 0))
         return row
     monkeypatch.setattr(storage._Connection, "fetchone", fetchone_then_rival)
+    # No write lock from the read on, as on Postgres: on SQLite the
+    # rivals would queue behind it instead of landing in between.
+    monkeypatch.setattr(storage._Connection, "begin_write", lambda self: None)
     # This call lost the race, so its own count is not applied on top
     # of a stale read (that would set the count back to 2).
     assert storage.record_failed_attempt(job_id, 0) is None

@@ -327,7 +327,9 @@ footer {
   transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.btn:hover { border-color: var(--faint); color: var(--fg); box-shadow: var(--shadow); }
+/* Hover leaves a disabled button (a pending decision save) alone;
+   :where() adds no specificity, so the state rules below still win. */
+.btn:where(:not(:disabled)):hover { border-color: var(--faint); color: var(--fg); box-shadow: var(--shadow); }
 
 /* The one yellow action per card. */
 .btn-primary {
@@ -840,12 +842,12 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
   font-size: 0.85rem;
 }
 
-.candidate-confirm:hover { color: var(--surface); border-color: var(--fg); }
+.candidate-confirm:where(:not(:disabled)):hover { color: var(--surface); border-color: var(--fg); }
 
 /* "None of these" chosen: de-emphasise the match buttons. They stay
    clickable, so picking one still overrides the "none" choice. */
 .candidate-confirm.is-muted { background: var(--hairline); border-color: var(--hairline); color: var(--muted); }
-.candidate-confirm.is-muted:hover { color: var(--fg); }
+.candidate-confirm.is-muted:where(:not(:disabled)):hover { color: var(--fg); }
 
 .candidate-detail td { background: var(--bg); white-space: normal; }
 

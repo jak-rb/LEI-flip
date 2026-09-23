@@ -80,19 +80,24 @@ def _load_legal_forms() -> list[str]:
         return _LEGAL_FORMS
 
     with open(DATA_DIR / "legal_forms.txt", encoding="utf-8") as f:
-        _LEGAL_FORMS = [line.strip().lower() for line in f if line.strip()]
+        forms = [line.strip().lower() for line in f if line.strip()]
 
     # Sort longest first so we strip "pty ltd" before "ltd".
-    _LEGAL_FORMS.sort(key=len, reverse=True)
+    forms.sort(key=len, reverse=True)
 
-    _LEGAL_FORM_PATTERNS = []
-    for form in _LEGAL_FORMS:
+    patterns = []
+    for form in forms:
         pattern = (
             r'(?:^|[\s,])\s*' + re.escape(form)
             + r'\s*(?:[,.]?\s*$|(?=[\s,]))'
         )
-        _LEGAL_FORM_PATTERNS.append(re.compile(pattern, re.IGNORECASE))
+        patterns.append(re.compile(pattern, re.IGNORECASE))
 
+    # Published only once complete, patterns first: a thread that sees
+    # _LEGAL_FORMS set uses the patterns at once, and normalize_name
+    # caches whatever result they give.
+    _LEGAL_FORM_PATTERNS = patterns
+    _LEGAL_FORMS = forms
     return _LEGAL_FORMS
 
 

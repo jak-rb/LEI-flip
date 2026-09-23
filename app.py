@@ -14,7 +14,6 @@ import logging
 import math
 import secrets
 import time
-import unicodedata
 
 from flask import (
     Flask,
@@ -38,7 +37,7 @@ from core.gleif import (
     GleifServerError,
 )
 from core.lookup import lookup_entity
-from core.models import InputEntity, InputError, LookupResult
+from core.models import InputEntity, InputError, LookupResult, is_blank
 from core.notes import czech_note
 from core.upload import parse_upload
 
@@ -246,26 +245,18 @@ def _form_value(key: str) -> str | None:
     return (request.form.get(key) or "").strip() or None
 
 
-def _none_if_invisible(value: str | None) -> str | None:
-    """None for a value of only whitespace and format characters."""
-    # Format characters (category Cf: U+200B, U+FEFF, ...) are
-    # invisible, so a field holding only them looks empty to the user.
-    if value and all(
-        char.isspace() or unicodedata.category(char) == "Cf"
-        for char in value
-    ):
-        return None
-    return value
-
-
 def _single_entities() -> list[InputEntity]:
     """The one entity of the single-lookup form.
 
     Raises:
         InputError: With the message to show when the input is unusable.
     """
-    name = _none_if_invisible(_form_value("entity_name"))
-    isin = _none_if_invisible(_form_value("isin"))
+    name = _form_value("entity_name")
+    isin = _form_value("isin")
+    # A name or ISIN of only invisible characters looks empty to the
+    # user, so it is left out (before InputEntity checks its length).
+    name = None if is_blank(name) else name
+    isin = None if is_blank(isin) else isin
     if not name and not isin:
         raise InputError(
             "Please enter an entity name or an ISIN.",
