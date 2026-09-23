@@ -99,8 +99,9 @@ def _load_legal_forms() -> list[str]:
 def country_to_iso(country_name: Optional[str]) -> Optional[str]:
     """Convert a country name to an ISO 3166-1 alpha-2 code.
 
-    Accepts English or Czech names (diacritics optional) and passes
-    through values that are already two-letter ISO codes.
+    Accepts English or Czech names (diacritics optional) and common
+    abbreviations such as "UK" and "ČR", and passes through values that
+    are already two-letter ISO codes.
 
     Args:
         country_name: The country name or code to convert (may be None).
@@ -111,16 +112,22 @@ def country_to_iso(country_name: Optional[str]) -> Optional[str]:
     if not country_name:
         return None
 
-    # Already an ISO code?
-    cleaned = country_name.strip().upper()
-    if len(cleaned) == 2 and cleaned.isalpha():
-        return cleaned
-
     mapping = _load_country_map()
     key = country_name.strip().lower()
 
+    # The mapping comes first: "UK" is not an ISO code, and "ČR" is how
+    # Czech users write Czechia.
     if key in mapping:
         return mapping[key]
+
+    # Already an ISO code? An unknown two-letter value is passed on too:
+    # as a country no candidate has, it keeps the country check strict
+    # instead of dropping it. Checked before the diacritics retry, so
+    # "CR" stays Costa Rica rather than "ČR" without its háček.
+    cleaned = country_name.strip().upper()
+    two_letters = len(cleaned) == 2 and cleaned.isalpha()
+    if two_letters and cleaned.isascii():
+        return cleaned
 
     # Retry without diacritics.
     key_ascii = unidecode(key)
@@ -128,7 +135,7 @@ def country_to_iso(country_name: Optional[str]) -> Optional[str]:
         if unidecode(k) == key_ascii:
             return v
 
-    return None
+    return cleaned if two_letters else None
 
 
 def _shorten_whitespace_run(match: re.Match) -> str:
