@@ -181,16 +181,21 @@ def _entity_input(entity: InputEntity) -> dict:
     }
 
 
+def _entity_fields(record: dict) -> dict:
+    """The InputEntity fields a job's stored query record holds."""
+    return {
+        "name": record.get("name"),
+        "isin": record.get("isin"),
+        "street": record.get("street"),
+        "town": record.get("city"),
+        "country": record.get("country"),
+        "zip_code": record.get("postal_code"),
+    }
+
+
 def _entity_from_input(record: dict) -> InputEntity:
     """Rebuild the InputEntity a job's stored query record describes."""
-    return InputEntity(
-        name=record.get("name"),
-        isin=record.get("isin"),
-        street=record.get("street"),
-        town=record.get("city"),
-        country=record.get("country"),
-        zip_code=record.get("postal_code"),
-    )
+    return InputEntity(**_entity_fields(record))
 
 
 def _result_row(entity, result, closest) -> dict:
@@ -353,6 +358,21 @@ def _gave_up(job_id: str, index: int) -> bool:
     return failures is not None and failures >= RUN_MAX_ATTEMPTS
 
 
+def _lookup(
+    entity: InputEntity, client: GleifClient
+) -> tuple[LookupResult, list]:
+    """Run lookup_entity, taking a GLEIF-wide error for an outage."""
+    try:
+        return lookup_entity(entity, client)
+    except (GleifQueryError, GleifServerError) as exc:
+        # GLEIF may fail every request alike (an outage, a block of
+        # the app's IPs, a moved API): the error is this entity's own
+        # only if GLEIF still answers a plain search.
+        if client.is_answering():
+            raise
+        raise GleifApiError(f"GLEIF fails every request: {exc}") from exc
+
+
 def _lookup_row(
     job_id: str,
     index: int,
@@ -365,8 +385,10 @@ def _lookup_row(
     A lookup that failed for good becomes a NO_MATCH row whose note
     says so: an unexpected error, a query GLEIF refuses, or - once
     RUN_MAX_ATTEMPTS calls have failed on the entity - GLEIF server
-    errors or a lookup too slow for a call's whole deadline. Whatever
-    is worth retrying later is raised instead.
+    errors or a lookup too slow for a call's whole deadline. A GLEIF
+    error counts against the entity only while GLEIF answers other
+    requests (see ``_lookup``). Whatever is worth retrying later is
+    raised instead.
 
     Args:
         job_id: The job's id.
@@ -381,10 +403,14 @@ def _lookup_row(
 
     Raises:
         DeadlineExceeded: If the call's deadline cut the lookup off.
-        GleifApiError: If GLEIF is unavailable or rate-limiting.
+        GleifApiError: If GLEIF is unavailable or rate-limiting; a
+            cut-off of a lookup that waiting out rate limits left
+            short of time is a GleifRateLimited too.
     """
+    client.rate_limit_waits = []
+    started = time.monotonic()
     try:
-        result, closest = lookup_entity(entity, client)
+        result, closest = _lookup(entity, client)
     except GleifQueryError as exc:
         logger.warning(
             "GLEIF refused entity %d of job %s: %s", index, job_id, exc
@@ -395,10 +421,20 @@ def _lookup_row(
             raise
         logger.exception("Giving up on entity %d of job %s", index, job_id)
         return _failed_row(entity, GLEIF_ERRORS_NOTE)
-    except DeadlineExceeded:
+    except DeadlineExceeded as exc:
+        # Every lookup has at least the time from the budget to the
+        # deadline, as none starts later. Wherever the cut-off came
+        # (GLEIF or OpenFIGI), a lookup whose rate-limit waits left it
+        # less than that of its own was stopped by them, not by its
+        # own slowness: the call pauses.
+        waits = client.rate_limit_waits
+        own_time = time.monotonic() - started - sum(waits)
+        least_time = RUN_DEADLINE_SECONDS - RUN_TIME_BUDGET_SECONDS
+        if waits and own_time < least_time:
+            raise GleifRateLimited(waits[-1]) from exc
         # Cut off, not failed: the next call looks it up afresh. Only
-        # a lookup that had the call's whole deadline to itself counts
-        # as failing, as trying that again cannot go better.
+        # a lookup that had the call's deadline to itself counts as
+        # failing, as trying that again cannot go better.
         if not alone or not _gave_up(job_id, index):
             raise
         logger.warning(
@@ -431,8 +467,9 @@ def run_job(job_id: str):
     passed no further lookup starts, and the one under way must end by
     RUN_DEADLINE_SECONDS. A lookup cut off by that deadline is not
     stored and the next call starts it again, while one that failed
-    for good is stored as a failed lookup (see ``_lookup_row``), so
-    the job can always finish. Two calls racing on one job (a second
+    for good is stored as a failed lookup (see ``_lookup_row``), as is
+    a stored entity that no longer passes the input rules, so the job
+    can always finish. Two calls racing on one job (a second
     tab, or a refresh while the previous call is still running) cannot
     store an entity twice: the store only accepts rows that continue
     from the result count this call started at.
@@ -453,7 +490,19 @@ def run_job(job_id: str):
     with GleifClient() as client:
         client.deadline = started + RUN_DEADLINE_SECONDS
         for index, record in enumerate(pending[:RUN_CHUNK_SIZE], offset):
-            entity = _entity_from_input(record)
+            try:
+                entity = _entity_from_input(record)
+            except ValidationError:
+                # Stored under older input rules (say, before a name
+                # of only invisible characters counted as none): it
+                # cannot be looked up, and must not stall the job.
+                logger.warning(
+                    "Entity %d of job %s breaks the input rules",
+                    index, job_id,
+                )
+                stale = InputEntity.model_construct(**_entity_fields(record))
+                rows.append(_failed_row(stale, LOOKUP_ERROR_NOTE))
+                continue
             try:
                 rows.append(
                     _lookup_row(job_id, index, entity, client, alone=not rows)
