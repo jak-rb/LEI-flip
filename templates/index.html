@@ -48,10 +48,12 @@
                            data-cs-placeholder="např. CAIAC Fund Management AG"
                            data-en-placeholder="e.g. CAIAC Fund Management AG">
                 </div>
+                {# No maxlength on the ISIN or the postal code: the browser
+                   cuts a paste before the server trims it, so a cap this
+                   close to a real value would send a padded one cut short. #}
                 <div class="field">
                     <label for="isin">ISIN</label>
                     <input type="text" id="isin" name="isin"
-                           maxlength="20"
                            placeholder="e.g. CZ0009010468"
                            data-cs-placeholder="např. CZ0009010468"
                            data-en-placeholder="e.g. CZ0009010468">
@@ -89,7 +91,6 @@
                 <div class="field">
                     <label for="postal_code" data-cs="PSČ" data-en="Postal code">Postal code</label>
                     <input type="text" id="postal_code" name="postal_code"
-                           maxlength="20"
                            placeholder="e.g. 13000"
                            data-cs-placeholder="např. 13000"
                            data-en-placeholder="e.g. 13000">

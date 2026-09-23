@@ -342,21 +342,44 @@ def _model_max_length(field):
                 if hasattr(item, "max_length"))
 
 
-def test_single_form_inputs_have_the_model_length_limits(client):
+def _page_maxlength(client):
+    """The maxlength of every named input of the search page."""
     inputs = _Inputs()
     inputs.feed(client.get("/").get_data(as_text=True))
+    return inputs.maxlength
+
+
+def test_free_text_inputs_have_the_model_length_limits(client):
+    maxlength = _page_maxlength(client)
     form_to_model = {
         "entity_name": "name",
-        "isin": "isin",
         "country": "country",
         "city": "town",
         "street": "street",
-        "postal_code": "zip_code",
     }
     for form_name, model_field in form_to_model.items():
-        assert inputs.maxlength[form_name] == str(
+        assert maxlength[form_name] == str(
             _model_max_length(model_field)
         ), form_name
+
+
+# The browser applies maxlength to a paste before anything trims it,
+# while the server trims first. A cap at the model limit on a short
+# identifier would send a padded value cut short, and the server would
+# search that wrong value instead of the one pasted.
+@pytest.mark.parametrize("form_name, padded, trimmed", [
+    ("isin", " " * 9 + APPLE_ISIN, APPLE_ISIN),
+    ("isin", "\t" * 30 + APPLE_ISIN + " " * 30, APPLE_ISIN),
+    ("postal_code", " " * 15 + "110 00", "110 00"),
+])
+def test_page_does_not_cut_a_padded_value_the_server_accepts(
+    client, form_name, padded, trimmed,
+):
+    assert _page_maxlength(client)[form_name] is None
+    stored = _stored_input(_create_single(
+        client, entity_name="Apple Inc", **{form_name: padded},
+    ))
+    assert stored[form_name] == trimmed
 
 
 def test_requirements_pin_the_installed_werkzeug():
