@@ -28,6 +28,11 @@ const STRINGS = {
         toDark: "Switch to dark mode",
         toLight: "Switch to light mode",
         record: (index, total) => `Record ${index} of ${total}`,
+        saveFailed: "Saving failed. Reload the page and try again.",
+        // The finished job's card state, worded as in results.html.
+        stateReview: "Needs review",
+        stateNone: "No matches found",
+        stateComplete: "Search complete",
     },
     cs: {
         needNameOrIsin: "Zadejte název subjektu nebo ISIN",
@@ -46,6 +51,10 @@ const STRINGS = {
         toDark: "Přepnout na tmavý režim",
         toLight: "Přepnout na světlý režim",
         record: (index, total) => `Záznam ${index} z ${total}`,
+        saveFailed: "Uložení se nezdařilo. Obnovte stránku a zkuste to znovu.",
+        stateReview: "Vyžaduje kontrolu",
+        stateNone: "Nenalezeny žádné shody",
+        stateComplete: "Vyhledávání dokončeno",
     },
 };
 
@@ -433,9 +442,10 @@ function getResultEls() {
     };
 }
 
-// Apply one progress response to the card's counters.
+// Apply one progress response (or a decision's counts, which have no
+// searched / total) to the card's counters.
 function applyProgress(els, progress) {
-    if (els.searched) {
+    if (els.searched && progress.searched != null) {
         els.searched.textContent = `${progress.searched} / ${progress.total}`;
     }
     if (els.matched && progress.matched != null) {
@@ -446,6 +456,22 @@ function applyProgress(els, progress) {
     }
     if (els.unmatched && progress.unmatched != null) {
         els.unmatched.textContent = progress.unmatched;
+    }
+}
+
+// After a validation decision: the finished job's new counts, and the
+// state line results.html would render for them. Both languages are
+// kept on the state line, so a language switch shows the new state.
+function applyDecisionCounts(els, counts) {
+    applyProgress(els, counts);
+    if (els.state) {
+        let key = "stateComplete";
+        if (counts.matched === 0) {
+            key = counts.need_validation > 0 ? "stateReview" : "stateNone";
+        }
+        els.state.setAttribute("data-en", STRINGS.en[key]);
+        els.state.setAttribute("data-cs", STRINGS.cs[key]);
+        els.state.textContent = t(key);
     }
 }
 
@@ -651,6 +677,19 @@ function setupValidation() {
     const decisionBtns = Array.from(
         section.querySelectorAll(".candidate-confirm, .validate-none"),
     );
+    const errorEl = section.querySelector(".validation-error");
+    const reloadHint = document.querySelector(".tables-reload-hint");
+
+    // Show (or clear) the message that the last save failed. Both
+    // languages are kept on the element for a language switch.
+    function showSaveFailed(failed) {
+        if (!errorEl) {
+            return;
+        }
+        errorEl.setAttribute("data-en", failed ? STRINGS.en.saveFailed : "");
+        errorEl.setAttribute("data-cs", failed ? STRINGS.cs.saveFailed : "");
+        errorEl.textContent = failed ? t("saveFailed") : "";
+    }
 
     // Save a decision for a record, then advance to the next one.
     async function saveDecision(record, choice) {
@@ -658,6 +697,7 @@ function setupValidation() {
         decisionBtns.forEach((btn) => {
             btn.disabled = true;
         });
+        showSaveFailed(false);
         try {
             const response = await fetch("/api/decision", {
                 method: "POST",
@@ -665,6 +705,8 @@ function setupValidation() {
                 body: JSON.stringify({ job_id: jobId, index, choice }),
             });
             if (!response.ok) {
+                // Nothing was saved: the record stays as it was.
+                showSaveFailed(true);
                 return;
             }
             const data = await response.json();
@@ -673,13 +715,21 @@ function setupValidation() {
                 data.decision.status === "confirmed" ? data.decision.lei : "";
             paintDecision(record);
             updateCounter();
+            if (data.counts) {
+                applyDecisionCounts(getResultEls(), data.counts);
+            }
+            if (reloadHint) {
+                reloadHint.hidden = false;
+            }
             // Advance only from the saved record: if the arrows moved
             // on while the save was pending, stay where the user went.
             if (records[current] === record && current < records.length - 1) {
                 show(current + 1, "next");
             }
         } catch (error) {
-            // Network hiccup: leave the record unchanged so it can retry.
+            // Network failure or an unreadable reply: leave the record
+            // unchanged; a reload shows what the server has.
+            showSaveFailed(true);
         } finally {
             decisionBtns.forEach((btn) => {
                 btn.disabled = false;
