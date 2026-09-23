@@ -14,8 +14,10 @@ results.
 #: GLEIF REST API base URL.
 GLEIF_BASE_URL = "https://api.gleif.org/api/v1"
 
-#: HTTP request timeout in seconds, applied to GLEIF calls.
-REQUEST_TIMEOUT = 30.0
+#: HTTP request timeout in seconds, applied to GLEIF calls. GLEIF
+#: normally answers within a second or two; a short timeout leaves a
+#: /run call's deadline room for the retries (see core/gleif.py).
+REQUEST_TIMEOUT = 10.0
 
 #: OpenFIGI mapping endpoint. Resolves an ISIN to its issuer name(s) as
 #: a last-resort ISIN fallback (see core/openfigi.py). An OpenFIGI API
@@ -25,7 +27,8 @@ OPENFIGI_BASE_URL = "https://api.openfigi.com/v3/mapping"
 
 #: HTTP request timeout in seconds for OpenFIGI calls. Kept separate
 #: from REQUEST_TIMEOUT: OpenFIGI can be slow, and this fallback is not
-#: on the critical path, so it gets its own (shorter) budget.
+#: on the critical path, so it gets its own budget (still cut to the
+#: time a /run call has left).
 OPENFIGI_TIMEOUT = 15.0
 
 #: Minimum name-similarity score (0-100) for a candidate to clear the

@@ -130,6 +130,7 @@ def lookup_entity(
     Raises:
         GleifApiError: If GLEIF cannot be reached. The caller renders
             this as the "service unavailable" state.
+        DeadlineExceeded: If the client's deadline comes first.
     """
     logger.info(
         "Looking up: %s (country: %s, ISIN: %s)",
@@ -531,7 +532,7 @@ def _isin_only_openfigi_review(
     isin = normalize_isin(entity.isin)
     scored: list[tuple[float, GleifCandidate]] = []
     seen: set[str] = set()
-    for figi_name in resolve_isin_to_names(isin):
+    for figi_name in resolve_isin_to_names(isin, deadline=client.deadline):
         for candidate in client.search_by_name(figi_name, page_size=5):
             if candidate.lei in seen:
                 continue

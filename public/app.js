@@ -21,6 +21,8 @@ const STRINGS = {
         unreachableResume: "Could not reach the server. Reload the page to resume.",
         serverFailed: "The search failed on the server.",
         reloadToResume: "Reload the page to resume.",
+        throttled: (seconds) =>
+            `GLEIF is limiting requests. Continuing in ${seconds} s…`,
         noFiles: "No files selected yet",
         removeFile: "Remove file",
         toDark: "Switch to dark mode",
@@ -37,6 +39,8 @@ const STRINGS = {
         unreachableResume: "Server není dostupný. Obnovte stránku pro pokračování.",
         serverFailed: "Vyhledávání na serveru selhalo.",
         reloadToResume: "Obnovte stránku pro pokračování.",
+        throttled: (seconds) =>
+            `GLEIF omezuje počet dotazů. Pokračuji za ${seconds} s…`,
         noFiles: "Zatím není vybrán žádný soubor",
         removeFile: "Odebrat soubor",
         toDark: "Přepnout na tmavý režim",
@@ -462,9 +466,44 @@ function showResultsError(els, message) {
     }
 }
 
+// Bounds, in seconds, of the pause after GLEIF rate-limited a /run call:
+// the server suggests the wait, the page keeps it reasonable.
+const THROTTLE_MIN_SECONDS = 2;
+const THROTTLE_MAX_SECONDS = 30;
+
+// Wait out GLEIF's rate limit before the next /run call, counting down in
+// the card's state line. Both languages are kept on the element, so a
+// language switch during the wait shows the countdown in the new one.
+async function waitOutThrottle(els, retryAfter) {
+    const seconds = Math.min(
+        Math.max(Math.ceil(Number(retryAfter)) || 0, THROTTLE_MIN_SECONDS),
+        THROTTLE_MAX_SECONDS,
+    );
+    const state = els.state;
+    const saved = state && {
+        en: state.getAttribute("data-en"),
+        cs: state.getAttribute("data-cs"),
+    };
+    for (let left = seconds; left > 0; left -= 1) {
+        if (state) {
+            state.setAttribute("data-en", STRINGS.en.throttled(left));
+            state.setAttribute("data-cs", STRINGS.cs.throttled(left));
+            state.textContent = t("throttled", left);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    if (state) {
+        state.setAttribute("data-en", saved.en);
+        state.setAttribute("data-cs", saved.cs);
+        state.textContent = saved[currentLang()];
+    }
+}
+
 // Drive a job to completion: each /run call looks up the next few entities
 // and returns the counts so far. When done, reload the page in its final,
-// server-rendered form so the tables appear under the card.
+// server-rendered form so the tables appear under the card. A call GLEIF
+// rate-limited says so ("throttled"); the page then pauses as suggested and
+// carries on by itself.
 async function runJob(jobId) {
     const els = getResultEls();
     const url = "/api/jobs/" + encodeURIComponent(jobId) + "/run";
@@ -501,6 +540,10 @@ async function runJob(jobId) {
                 "/results?job=" + encodeURIComponent(jobId),
             );
             return;
+        }
+
+        if (data.throttled) {
+            await waitOutThrottle(els, data.retry_after);
         }
     }
 }
