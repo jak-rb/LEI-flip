@@ -2,15 +2,18 @@
 """Build CSV and Excel exports from a stored search.
 
 One row per searched entity, carrying the lookup's "answer" columns
-(used by the /download routes). Cells that a spreadsheet could read as a
-formula are neutralised (CWE-1236).
+(used by the /download routes). Characters XML forbids are dropped, and
+cells that a spreadsheet could read as a formula are neutralised
+(CWE-1236).
 """
 
 import csv
 import io
+import re
 from typing import Optional
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
 #: Export column headers, in order.
 COLUMNS = [
@@ -38,10 +41,20 @@ COLUMNS = [
 #: Leading characters that make a spreadsheet treat a cell as a formula.
 _FORMULA_TRIGGERS = ("=", "+", "-", "@")
 
+#: Characters XML 1.0 forbids: openpyxl refuses the control characters
+#: (a 500 on the Excel download) and writes U+FFFE/U+FFFF into a
+#: workbook that no longer opens. User input and GLEIF text can hold
+#: them.
+_XML_ILLEGAL_RE = re.compile(
+    ILLEGAL_CHARACTERS_RE.pattern + r"|[\ufffe\uffff]"
+)
+
 
 def _sanitize(value: object) -> str:
-    """Stringify a value, neutralising spreadsheet formula injection."""
+    """Stringify a value, XML-safe and with formulas neutralised."""
     text = "" if value is None else str(value)
+    # Dropped first, so no formula can hide behind a control character.
+    text = _XML_ILLEGAL_RE.sub("", text)
     if text and text[0] in _FORMULA_TRIGGERS:
         return "'" + text
     return text

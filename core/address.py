@@ -3,6 +3,7 @@
 
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,7 @@ _RE_PUNCT = re.compile(r'[,.:;/]+')
 _RE_WHITESPACE = re.compile(r'\s+')
 # For normalize_name.
 _RE_COMMA_TRAIL = re.compile(r'[,.:;]+')
+_RE_LONG_WHITESPACE = re.compile(r'\s{21,}')
 
 # US state abbreviations (50 + DC). Used to detect "STATE 12345" style
 # ZIPs (e.g. "NY 10019") so the state token can be stripped, WITHOUT
@@ -129,6 +131,30 @@ def country_to_iso(country_name: Optional[str]) -> Optional[str]:
     return None
 
 
+def _shorten_whitespace_run(match: re.Match) -> str:
+    """Shorten a long whitespace run without changing normalize_name."""
+    # The legal-form patterns backtrack quadratically over a run of
+    # whitespace: "A", 498 spaces, "B" took up to a second per call,
+    # and one /run took minutes. For a run of two or more characters,
+    # the output of normalize_name depends only on the run's last
+    # character (a legal-form match may leave it behind), on whether it
+    # holds a newline (which stops the share-class ".*"), U+0085 (which
+    # unidecode drops) or any other whitespace (all of which unidecode
+    # turns into whitespace), and on whether it is longer than the 20
+    # characters the trailing-parentheses pattern allows. The shorter
+    # run keeps all of that in at most 24 characters: its first 20,
+    # one of each of those three kinds in the rest, and its last one.
+    run = match.group()
+    rest = run[20:-1]
+    kinds = "".join(char for char in "\n\x85" if char in rest)
+    if any(char not in "\n\x85" for char in rest):
+        kinds += " "
+    return run[:20] + kinds + run[-1]
+
+
+# The matcher normalizes the searched name again for every name of
+# every candidate, so each lookup repeats the same few inputs.
+@lru_cache(maxsize=1024)
 def normalize_name(name: str) -> str:
     """Normalize an entity name for matching.
 
@@ -145,6 +171,7 @@ def normalize_name(name: str) -> str:
         return ""
 
     result = name.strip().lower()
+    result = _RE_LONG_WHITESPACE.sub(_shorten_whitespace_run, result)
 
     _load_legal_forms()
     for pattern in _LEGAL_FORM_PATTERNS:
