@@ -10,7 +10,8 @@ dependency is needed.
 A row with a name or an ISIN is never dropped or cut short: one with a
 value over its length limit refuses the whole file, with a message
 naming the row. Reading stops as soon as a file is known to hold too
-many entities.
+many entities, and an .xlsx is read within a budget of bytes and XML
+nodes, so a small crafted file cannot tie the server up.
 """
 
 import codecs
@@ -19,12 +20,13 @@ import io
 import itertools
 import logging
 import re
+import xml.parsers.expat
 import zipfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-from openpyxl import load_workbook
 from openpyxl.chartsheet import Chartsheet
+from openpyxl.reader.excel import ExcelReader
 from pydantic import ValidationError
 from unidecode import unidecode
 
@@ -66,7 +68,8 @@ _HEADER_WORDS = frozenset({
     "name", "entity", "company", "legal", "full", "party", "issuer",
     "firm", "firma", "firmy", "nazev", "subjekt", "subjektu",
     "obchodni", "jmeno", "emitent", "emitenta", "spolecnost",
-    "spolecnosti",
+    "spolecnosti", "counterparty", "protistrana", "client", "klient",
+    "customer",
     # ISIN
     "isin", "code", "kod", "ident", "identifier",
     # Address
@@ -75,18 +78,27 @@ _HEADER_WORDS = frozenset({
     "postcode", "psc",
 })
 
+#: An ISIN anywhere in a cell, once its spaces are removed.
+_ISIN_SHAPE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
+
 #: Columns read from an .xlsx row whose column A holds a semicolon
 #: line: Excel split the line again at every comma, so rebuilding it
 #: takes the cells after the six documented columns too.
 _LINE_COLUMNS = 50
 
-#: Largest unpacked size of an .xlsx, in all and of its shared strings,
-#: that is read. A real 100-entity workbook is far smaller, while a
-#: crafted file of a few kilobytes can unpack to gigabytes, or hold
-#: millions of tiny shared strings that take minutes to load (about
-#: 10 microseconds each).
-_MAX_UNPACKED_BYTES = 50 * 1024 * 1024
-_MAX_SHARED_STRINGS_BYTES = 10 * 1024 * 1024
+#: Most an .xlsx may make openpyxl read: bytes unpacked, and XML nodes
+#: (elements and attributes) parsed, counting a part again each time it
+#: is read. A real 100-entity workbook takes under 10,000 nodes, while
+#: a crafted file of a few kilobytes can unpack to gigabytes, hold
+#: millions of tiny elements (openpyxl spends up to some 10
+#: microseconds on each node), or name one part from many places so
+#: that it is parsed again and again.
+_MAX_READ_BYTES = 50 * 1024 * 1024
+_MAX_READ_NODES = 150_000
+
+#: The last row of an Excel worksheet. A row numbered past it is not
+#: from Excel, and would make openpyxl yield every empty row before it.
+_LAST_ROW = 1_048_576
 
 #: Text formats read with the csv module: extension -> delimiter, where
 #: None means detect it. Excel's "Text (Tab delimited)" and "Unicode
@@ -150,10 +162,7 @@ def _read_xlsx(content: bytes) -> list[_Row]:
     # The whole read sits in the try: in read-only mode a damaged sheet
     # only fails once its rows are read.
     try:
-        _check_unpacked_size(content)
-        workbook = load_workbook(
-            io.BytesIO(content), read_only=True, data_only=True
-        )
+        workbook = _load_workbook(content)
         sheet = workbook.active
         # Excel saves the sheet on screen as the active one; a chart
         # sheet has no cells, so fall back to the first worksheet.
@@ -170,6 +179,16 @@ def _read_xlsx(content: bytes) -> list[_Row]:
                 for number, cells in _filled_rows(sheet, len(_COLUMNS))
             )
         workbook.close()
+    except _TooMuchData:
+        logger.warning("Uploaded .xlsx needs more than the read budget")
+        raise InputError(
+            "The .xlsx file holds too much data to read. Keep only the "
+            f"sheet with the entities (at most {MAX_ENTITIES}), or save "
+            "it as CSV UTF-8.",
+            "Soubor .xlsx obsahuje příliš mnoho dat. Ponechte v něm jen "
+            f"list se subjekty (nejvýše {MAX_ENTITIES}) nebo ho uložte "
+            "jako CSV UTF-8.",
+        ) from None
     except InputError:
         raise
     except Exception as error:
@@ -182,31 +201,84 @@ def _read_xlsx(content: bytes) -> list[_Row]:
     return rows
 
 
-def _check_unpacked_size(content: bytes) -> None:
-    """Refuse an .xlsx that unpacks to more than is safe to read."""
-    with zipfile.ZipFile(io.BytesIO(content)) as archive:
-        members = archive.infolist()
-    # zipfile never unpacks a member past its stated size, so the
-    # stated sizes bound what openpyxl can be made to parse.
-    total = sum(member.file_size for member in members)
-    shared_strings = sum(
-        member.file_size for member in members
-        if member.filename.lower().endswith("sharedstrings.xml")
+class _TooMuchData(Exception):
+    """An .xlsx made openpyxl read more than the read budget allows.
+
+    Not a ValueError, which openpyxl catches and wraps as its own.
+    """
+
+
+class _GuardedArchive(zipfile.ZipFile):
+    """A zip archive that stops its reader once it has read too much.
+
+    openpyxl may read one part many times over (every sheet entry and
+    chart anchor can name the same one), so every read is charged: the
+    bytes handed out, and the XML nodes in them, counted by an expat
+    parser of its own (openpyxl parses with expat too). A part with a
+    DTD is refused: Office Open XML parts never have one, and its
+    entities could blow a small part up to gigabytes of text.
+    """
+
+    def __init__(self, file) -> None:
+        super().__init__(file)
+        self._bytes_left = _MAX_READ_BYTES
+        self._nodes_left = _MAX_READ_NODES
+
+    def open(self, name, mode="r", pwd=None, **kwargs):
+        """Open a part whose reads are charged to the budget."""
+        info = self.getinfo(name) if isinstance(name, str) else name
+        # Checked up front, as reading a whole part holds it in memory.
+        if info.file_size > self._bytes_left:
+            raise _TooMuchData
+        part = super().open(info, mode, pwd, **kwargs)
+        counter = xml.parsers.expat.ParserCreate()
+        counter.StartElementHandler = self._charge_nodes
+        counter.StartDoctypeDeclHandler = _refuse_doctype
+        read = part.read
+
+        def charged_read(size=-1):
+            nonlocal counter
+            data = read(size)
+            self._bytes_left -= len(data)
+            if self._bytes_left < 0:
+                raise _TooMuchData
+            if counter is not None:
+                try:
+                    counter.Parse(data, not data)
+                except xml.parsers.expat.ExpatError:
+                    # Not XML: openpyxl fails on it too or reads it raw.
+                    counter = None
+            return data
+
+        part.read = charged_read
+        return part
+
+    def _charge_nodes(self, name, attributes) -> None:
+        """Charge one element and its attributes to the budget."""
+        self._nodes_left -= 1 + len(attributes)
+        if self._nodes_left < 0:
+            raise _TooMuchData
+
+
+def _refuse_doctype(*declaration) -> None:
+    """Refuse a part that declares a DTD (see _GuardedArchive)."""
+    raise ValueError("an .xlsx part declares a DTD")
+
+
+def _load_workbook(content: bytes):
+    """Open an .xlsx read-only, its reads guarded by _GuardedArchive.
+
+    Does what openpyxl's load_workbook does, with the archive swapped
+    before anything is read from it.
+    """
+    reader = ExcelReader(
+        io.BytesIO(content), read_only=True, data_only=True,
+        keep_links=False,
     )
-    if (
-        total > _MAX_UNPACKED_BYTES
-        or shared_strings > _MAX_SHARED_STRINGS_BYTES
-    ):
-        logger.warning(
-            "Uploaded .xlsx unpacks to %d bytes (%d of shared strings)",
-            total, shared_strings,
-        )
-        raise InputError(
-            "The .xlsx file holds too much data to read. Keep only the "
-            "sheet with the entities, or save it as CSV UTF-8.",
-            "Soubor .xlsx obsahuje příliš mnoho dat. Ponechte v něm jen "
-            "list se subjekty nebo ho uložte jako CSV UTF-8.",
-        )
+    reader.archive.close()
+    reader.archive = _GuardedArchive(io.BytesIO(content))
+    reader.read()
+    return reader.wb
 
 
 def _filled_rows(sheet, width: int) -> Iterator[tuple[int, list[str]]]:
@@ -216,6 +288,8 @@ def _filled_rows(sheet, width: int) -> Iterator[tuple[int, list[str]]]:
     """
     rows = sheet.iter_rows(max_col=width, values_only=True)
     for number, values in enumerate(rows, start=1):
+        if number > _LAST_ROW:
+            raise ValueError(f"row {number} is past Excel's last row")
         # Checked on the raw values first, as it is cheap: one stray
         # far-away cell makes openpyxl yield a million empty rows.
         if values.count(None) == len(values):
@@ -226,18 +300,23 @@ def _filled_rows(sheet, width: int) -> Iterator[tuple[int, list[str]]]:
 
 
 def _holds_semicolon_lines(sheet) -> bool:
-    """Whether every non-blank row keeps a semicolon line in column A.
+    """Whether the non-blank rows keep semicolon lines in column A.
 
     That is what Excel shows for a semicolon CSV opened with the comma
     as the delimiter: each whole line lands in column A, split again
-    into the next columns wherever a value holds a comma.
+    into the next columns wherever a value holds a comma. At most a
+    header and MAX_ENTITIES + 1 rows are checked: read as columns, that
+    many rows would be too many entities anyway, so the lines are the
+    one reading left to try.
     """
-    found = False
+    found = 0
     for _, cells in _filled_rows(sheet, _LINE_COLUMNS):
         if ";" not in cells[0]:
             return False
-        found = True
-    return found
+        found += 1
+        if found > MAX_ENTITIES + 1:
+            break
+    return found > 0
 
 
 def _split_semicolon_lines(sheet) -> Iterator[_Row]:
@@ -345,18 +424,42 @@ def _entity_rows(rows: Iterable[_Row]) -> list[_Row]:
 
 
 def _is_header(cells: list[str]) -> bool:
-    """Whether a row holds column labels rather than an entity."""
+    """Whether a row holds column labels rather than an entity.
+
+    The name or the ISIN cell must be a label, or most filled cells
+    must: a city or a street may be named like a label (Clarks is in
+    Street, Somerset), so the address cells only count together.
+    """
+    name = cells[0]
+    isin = cells[1] if len(cells) > 1 else ""
     # A company may be named like a label, but a real ISIN beside the
     # name shows the row is data.
-    if len(cells) > 1 and is_valid_isin(normalize_isin(cells[1])):
+    if is_valid_isin(normalize_isin(isin)):
         return False
-    return any(_is_label(cell) for cell in cells)
+    if _is_label(name) or _is_label(isin) or _is_isin_label(isin):
+        return True
+    filled = [cell for cell in cells if cell]
+    return sum(_is_label(cell) for cell in filled) * 2 > len(filled)
 
 
 def _is_label(cell: str) -> bool:
     """Whether a cell is a column label, such as "ISIN kód"."""
-    words = re.findall(r"[a-z0-9]+", unidecode(cell).lower())
+    words = _words(cell)
     return bool(words) and all(word in _HEADER_WORDS for word in words)
+
+
+def _is_isin_label(cell: str) -> bool:
+    """Whether an ISIN cell is a label, such as "ISIN (optional)"."""
+    words = _words(cell)
+    return (
+        bool(words) and words[0].startswith("isin")
+        and not _ISIN_SHAPE.search(normalize_isin(cell))
+    )
+
+
+def _words(cell: str) -> list[str]:
+    """A cell's words, lower-case and without diacritics."""
+    return re.findall(r"[a-z0-9]+", unidecode(cell).lower())
 
 
 def _rows_to_entities(rows: list[_Row]) -> list[InputEntity]:

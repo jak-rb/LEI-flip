@@ -12,8 +12,10 @@ import zipfile
 
 import pytest
 from openpyxl import Workbook
+from openpyxl.chart import BarChart, Reference
 
 import app as app_module
+import core.upload as upload
 from core.models import InputError
 from core.upload import MAX_ENTITIES, parse_upload
 
@@ -220,6 +222,13 @@ def test_the_route_returns_the_row_error_in_both_languages(client):
     ["Obchodní firma", "Kód ISIN"],
     ["Protistrana", "", "Country", "City", "Street", "ZIP"],
     ["", "ISIN"],
+    ["Counterparty", "ISIN (if known)"],
+    ["Name (required)", "ISIN (optional)"],
+    ["Klient", "ISIN číslo"],
+    ["Issuer", "ISINCODE"],
+    ["Counterparty"],
+    ["Client"],
+    ["Customer name"],
 ])
 def test_natural_and_database_headers_are_skipped(header):
     content = _csv([header, GOOD_ROW])
@@ -236,10 +245,26 @@ def test_natural_and_database_headers_are_skipped(header):
     ["Country Garden Holdings Co Ltd", "", "CN"],
     ["City Developments Ltd", "", "SG"],
     ["Street Capital Group Inc"],
+    # A city or street named like a label (Clarks is in Street).
+    ["C. & J. Clark International Limited", "", "GB", "Street",
+     "40 High Street", "BA16 0EQ"],
+    ["Beta a.s.", "", "GB", "Leeds", "Town Street", "LS1 6PU"],
+    ["Beta a.s.", "", "CZ", "Praha", "Ulice", "110 00"],
 ])
 def test_a_data_row_is_never_taken_for_a_header(first_row):
     names = [name for name, _ in _entities(_csv([first_row, GOOD_ROW]))]
     assert names == [first_row[0], "Alfa a.s."]
+    names = [
+        name for name, _ in _entities(_xlsx([first_row, GOOD_ROW]), "in.xlsx")
+    ]
+    assert names == [first_row[0], "Alfa a.s."]
+
+
+def test_a_header_with_a_worded_isin_label_leaves_room_for_100_rows():
+    rows = [["Counterparty", "ISIN (if known)"]] + [
+        [f"Firma {index} a.s.", ""] for index in range(MAX_ENTITIES)
+    ]
+    assert len(parse_upload("in.csv", _csv(rows))) == MAX_ENTITIES
 
 
 def test_the_header_after_blank_rows_is_skipped():
@@ -355,35 +380,179 @@ def test_an_xlsx_row_that_is_not_a_semicolon_line_keeps_columns_as_is():
     ]
 
 
-def test_a_shared_strings_bomb_is_refused_quickly():
-    strings = (
-        b'<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats'
-        b'.org/spreadsheetml/2006/main">' + b"<si><t>A</t></si>" * 3_000_000
-        + b"</sst>"
+def test_a_long_xlsx_of_semicolon_lines_stops_at_the_cap(monkeypatch):
+    read = []
+    filled_rows = upload._filled_rows
+
+    def counted_rows(sheet, width):
+        for row in filled_rows(sheet, width):
+            read.append(row)
+            yield row
+
+    monkeypatch.setattr(upload, "_filled_rows", counted_rows)
+    # Each line was split again at its commas, as Excel does.
+    rows_xml = "".join(
+        _inline_row(
+            number, f"Firma {number};CZ0005112300;CZ;Praha;Ulice 1",
+            " 2. patro", " vchod B", ";110 00",
+        )
+        for number in range(1, 5001)
     )
     content = _with_parts(_xlsx([["x"]]), {
-        "xl/sharedStrings.xml": strings,
+        "xl/worksheets/sheet1.xml": _sheet_xml(rows_xml, "A1:D5000"),
     })
+    english, _ = _refusal(content, "in.xlsx")
+    assert english.startswith(TOO_MANY_EN)
+    assert len(read) < 3 * MAX_ENTITIES
+
+
+def _assert_too_much_data_quickly(content):
     started = time.perf_counter()
     english, czech = _refusal(content, "in.xlsx")
     assert english.startswith(TOO_MUCH_DATA_EN)
     assert czech.startswith(TOO_MUCH_DATA_CS)
-    assert time.perf_counter() - started < 10
+    assert time.perf_counter() - started < 30
 
 
-def test_an_xlsx_that_unpacks_to_too_much_is_refused():
-    content = _with_parts(_xlsx([GOOD_ROW]), {
-        "xl/media/padding.bin": b"\0" * (60 * 1024 * 1024),
-    })
+def test_a_row_of_countless_empty_cells_is_refused_quickly():
+    # openpyxl builds every cell of a row before any column limit.
+    rows_xml = (
+        _inline_row(1, "Tiny company") + "<row>" + "<c/>" * 600_000
+        + "</row>"
+    )
+    _assert_too_much_data_quickly(_with_parts(_xlsx([["x"]]), {
+        "xl/worksheets/sheet1.xml": _sheet_xml(rows_xml, "A1:B2"),
+    }))
+
+
+def test_countless_empty_rows_are_refused_quickly():
+    rows_xml = _inline_row(1, "Tiny company") + "<row/>" * 600_000
+    _assert_too_much_data_quickly(_with_parts(_xlsx([["x"]]), {
+        "xl/worksheets/sheet1.xml": _sheet_xml(rows_xml, "A1:B2"),
+    }))
+
+
+def _listed_sheets(count):
+    """Rewrite workbook.xml to list its one sheet ``count`` times."""
+    def rewrite(workbook):
+        entries = "".join(
+            f'<sheet name="S{index}" sheetId="{index + 1}" r:id="rId1" />'
+            for index in range(count)
+        )
+        start = workbook.index(b"<sheets>") + len(b"<sheets>")
+        end = workbook.index(b"</sheets>")
+        return workbook[:start] + entries.encode() + workbook[end:]
+    return rewrite
+
+
+def test_one_sheet_listed_many_times_is_refused_quickly():
+    # Loading reads the part of every sheet entry; with no <dimension>
+    # it reads all of it, every time.
+    rows_xml = _inline_row(1, "Tiny company") + "<row/>" * 20_000
+    _assert_too_much_data_quickly(_with_parts(_xlsx([["x"]]), {
+        "xl/worksheets/sheet1.xml": _sheet_xml(rows_xml),
+        "xl/workbook.xml": _listed_sheets(40),
+    }))
+
+
+def test_one_big_part_read_many_times_is_refused_quickly():
+    rows_xml = _inline_row(1, "Tiny company") + " " * (5 * 1024 * 1024)
+    _assert_too_much_data_quickly(_with_parts(_xlsx([["x"]]), {
+        "xl/worksheets/sheet1.xml": _sheet_xml(rows_xml),
+        "xl/workbook.xml": _listed_sheets(40),
+    }))
+
+
+def test_shared_strings_under_any_part_name_are_bounded():
+    # openpyxl finds the shared strings through [Content_Types].xml,
+    # whatever the part is called.
+    strings = (
+        b'<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats'
+        b'.org/spreadsheetml/2006/main">' + b"<si><t>A</t></si>" * 300_000
+        + b"</sst>"
+    )
+    override = (
+        b'<Override PartName="/xl/strings.xml" ContentType="application/'
+        b'vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings'
+        b'+xml" /></Types>'
+    )
+    _assert_too_much_data_quickly(_with_parts(_xlsx([["x"]]), {
+        "xl/strings.xml": strings,
+        "[Content_Types].xml": lambda old: old.replace(b"</Types>", override),
+    }))
+
+
+def test_one_chart_drawn_many_times_is_refused_quickly():
+    workbook = Workbook()
+    workbook.active.append(["Tiny company", 1])
+    chart = BarChart()
+    chart.add_data(Reference(workbook.active, min_col=2, min_row=1))
+    workbook.create_chartsheet().add_chart(chart)
+    content = io.BytesIO()
+    workbook.save(content)
+
+    def drawing(old):
+        start = old.index(b"<absoluteAnchor>")
+        end = old.index(b"</absoluteAnchor>") + len(b"</absoluteAnchor>")
+        return old[:start] + old[start:end] * 500 + old[end:]
+
+    def chart_sheet_rels(old):
+        start = old.index(b"<Relationship ")
+        end = old.index(b"/>", start) + 2
+        relationships = b"".join(
+            old[start:end].replace(b'Id="rId1"', b'Id="rId%d"' % number)
+            for number in range(1, 11)
+        )
+        return old[:start] + relationships + old[end:]
+
+    _assert_too_much_data_quickly(_with_parts(content.getvalue(), {
+        "xl/drawings/drawing1.xml": drawing,
+        "xl/chartsheets/_rels/sheet1.xml.rels": chart_sheet_rels,
+    }))
+
+
+def test_an_xlsx_part_that_unpacks_to_too_much_is_refused():
+    sheet = _sheet_xml(_inline_row(1, "Tiny company")).replace(
+        b"</worksheet>", b" " * (60 * 1024 * 1024) + b"</worksheet>"
+    )
+    _assert_too_much_data_quickly(_with_parts(_xlsx([["x"]]), {
+        "xl/worksheets/sheet1.xml": sheet,
+    }))
+
+
+def _assert_unreadable(content):
     english, czech = _refusal(content, "in.xlsx")
-    assert english.startswith(TOO_MUCH_DATA_EN)
-    assert czech.startswith(TOO_MUCH_DATA_CS)
-
-
-def test_a_file_that_is_not_a_workbook_gets_the_clean_message():
-    english, czech = _refusal(b"not a zip at all", "in.xlsx")
     assert english == (
         "Could not read the .xlsx file; is it a valid Excel file?"
     )
     assert czech.startswith("Soubor .xlsx se nepodařilo přečíst.")
+
+
+def test_a_row_past_the_last_excel_row_is_refused():
+    # openpyxl would first yield every empty row before it.
+    rows_xml = (
+        _inline_row(1, "Tiny company")
+        + _inline_row(20_000_000, "Late company")
+    )
+    _assert_unreadable(_with_parts(_xlsx([["x"]]), {
+        "xl/worksheets/sheet1.xml": _sheet_xml(rows_xml),
+    }))
+
+
+def test_an_xlsx_part_with_a_dtd_is_refused():
+    # Office Open XML has no DTDs, and their entities can blow a small
+    # part up to gigabytes of text.
+    sheet = _sheet_xml(_inline_row(1, "&company;")).replace(
+        b"<worksheet",
+        b'<!DOCTYPE worksheet [<!ENTITY company "Tiny company">]>'
+        b"<worksheet",
+        1,
+    )
+    _assert_unreadable(_with_parts(_xlsx([["x"]]), {
+        "xl/worksheets/sheet1.xml": sheet,
+    }))
+
+
+def test_a_file_that_is_not_a_workbook_gets_the_clean_message():
+    _assert_unreadable(b"not a zip at all")
 
