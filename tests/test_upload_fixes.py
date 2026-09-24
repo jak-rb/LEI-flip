@@ -380,6 +380,30 @@ def test_a_header_with_other_labels_is_skipped(header):
 
 
 @pytest.mark.parametrize("header", [
+    ["Name", "ISIN", "Address 1", "Address 2"],
+    ["PARTY_FULL_NAME", "ISIN_IDENT", "ADDR_LINE_1", "ADDR_LINE_2"],
+    ["Název", "", "Adresa 1", "Adresa 2", "Adresa 3"],
+    ["Name", "ISIN", "Address line 1", "Address line 2"],
+])
+def test_numbered_labels_do_not_make_a_header_an_entity(header):
+    rows = [header, GOOD_ROW]
+    assert _names(_csv(rows)) == ["Alfa a.s."]
+    assert _names(_xlsx(rows), "in.xlsx") == ["Alfa a.s."]
+
+
+@pytest.mark.parametrize("first_row", [
+    ["Firma 1"],
+    ["Client 1", "", "CZ"],
+    ["Firma 1", "", "", "", "Ulice 1"],
+    ["Company 12", "", "", "Praha", "Street 1"],
+])
+def test_a_numbered_name_starting_a_list_is_kept(first_row):
+    rows = [first_row, ["Firma 2"]]
+    assert _names(_csv(rows)) == [first_row[0], "Firma 2"]
+    assert _names(_xlsx(rows), "in.xlsx") == [first_row[0], "Firma 2"]
+
+
+@pytest.mark.parametrize("header", [
     OTHER_HEADERS[index] for index in (0, 1, 7, 8)
 ])
 def test_a_full_file_under_a_header_with_other_labels_is_accepted(header):

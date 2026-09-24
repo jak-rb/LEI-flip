@@ -417,6 +417,24 @@ def test_long_whitespace_runs_shrink_whatever_they_mix():
         assert len(shortened) <= 24, length
 
 
+@pytest.mark.parametrize("space", ["  ", "\t", "\u00a0", " \u00a0 ", "\n"])
+@pytest.mark.parametrize("name", [
+    "Alfa s. r. o.",
+    "Alfa, spolecnost s rucenim omezenym",
+    "Beta sp. z o.o.",
+    "Gamma Pty Ltd",
+    "Deloitte Limited Liability Partnership",
+    "Airbus Societas Europaea",
+])
+def test_irregular_whitespace_inside_a_legal_form_is_still_stripped(
+    name, space,
+):
+    # A form of several words used to match only with single spaces,
+    # so "s.  r. o." or a no-break space from a register kept it.
+    irregular = name.replace(" ", space)
+    assert address.normalize_name(irregular) == address.normalize_name(name)
+
+
 #: Hostile names at the 500-character limit.
 HOSTILE_NAMES = {
     "spaces": "A" + " " * 498 + "B",

@@ -87,8 +87,12 @@ def _load_legal_forms() -> list[str]:
 
     patterns = []
     for form in forms:
+        # Any whitespace between a form's words, as in "s.  r. o." or
+        # a no-break space copied from a register: the name is not
+        # collapsed until after the forms are stripped.
+        words = r'\s+'.join(re.escape(word) for word in form.split())
         pattern = (
-            r'(?:^|[\s,])\s*' + re.escape(form)
+            r'(?:^|[\s,])\s*' + words
             + r'\s*(?:[,.]?\s*$|(?=[\s,]))'
         )
         patterns.append(re.compile(pattern, re.IGNORECASE))

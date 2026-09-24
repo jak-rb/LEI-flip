@@ -13,6 +13,7 @@ rate limit, and without it the client runs keyless (fine at this tool's
 volume).
 """
 
+import json
 import logging
 import os
 import time
@@ -21,7 +22,7 @@ from typing import Optional
 import requests
 
 from .constants import OPENFIGI_BASE_URL, OPENFIGI_TIMEOUT
-from .gleif import DeadlineExceeded
+from .gleif import DeadlineExceeded, read_body
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,8 @@ def resolve_isin_to_names(
     Args:
         isin: The normalised (upper-cased, space-free) ISIN.
         deadline: Optional ``time.monotonic()`` value. The request does
-            not start after it, and its timeout is cut to the time left.
+            not start after it, its timeout is cut to the time left,
+            and the reply is read only until it (see read_body).
 
     Returns:
         Unique issuer names in the order returned, or an empty list.
@@ -68,9 +70,11 @@ def resolve_isin_to_names(
             json=[{"idType": "ID_ISIN", "idValue": isin}],
             headers=headers,
             timeout=timeout,
+            stream=True,
         )
+        body = read_body(resp, deadline)
         resp.raise_for_status()
-        data = resp.json()
+        data = json.loads(body)
     except requests.RequestException as e:
         if deadline is not None and time.monotonic() >= deadline:
             raise DeadlineExceeded(

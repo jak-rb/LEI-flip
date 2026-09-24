@@ -75,13 +75,17 @@ _HEADER_WORDS = frozenset({
     "isin", "code", "kod", "ident", "identifier",
     # Address
     "country", "zeme", "stat", "city", "town", "mesto", "obec",
-    "street", "ulice", "address", "adresa", "addr", "zip", "postal",
-    "postcode", "psc",
+    "street", "ulice", "address", "adresa", "addr", "line", "zip",
+    "postal", "postcode", "psc",
 })
 
 #: A note in parentheses, such as "(optional)" in "ISIN (optional)":
 #: it says how to fill a column, not what the column is.
 _LABEL_NOTE = re.compile(r"\([^)]*\)")
+
+#: Most digits in the number of a numbered label ("Address 2"): a
+#: column number is short, a street number or postal code often not.
+_LABEL_NUMBER_DIGITS = 2
 
 #: An ISIN anywhere in a cell, once its spaces are removed.
 _ISIN_SHAPE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
@@ -97,14 +101,14 @@ _LINE_COLUMNS = 50
 #: Most an .xlsx may make openpyxl read: bytes unpacked, and XML nodes
 #: (elements and attributes) parsed, counting a part again each time it
 #: is read. A real 100-entity workbook takes under 10,000 nodes, and
-#: the budget leaves room for some 250,000 shared strings from other
-#: sheets (about 5 s to read), while
+#: the budget leaves room for some 500,000 shared strings from other
+#: sheets (two nodes each: about 5 s and 80 MB to read), while
 #: a crafted file of a few kilobytes can unpack to gigabytes, hold
 #: millions of tiny elements (openpyxl spends up to some 10
 #: microseconds on each node), or name one part from many places so
 #: that it is parsed again and again.
 _MAX_READ_BYTES = 50 * 1024 * 1024
-_MAX_READ_NODES = 500_000
+_MAX_READ_NODES = 1_000_000
 
 #: The last row of an Excel worksheet. A row numbered past it is not
 #: from Excel, and would make openpyxl yield every empty row before it.
@@ -627,7 +631,9 @@ def _is_header(cells: list[str]) -> bool:
     Company"), so a row whose ISIN is valid, or with at least as many
     cells that look like data (see _looks_like_data) as labels, is
     never a header; a header may still name a column or two in a way
-    that looks like data ("Address 1", "CC"). Otherwise it is one when
+    that looks like data ("Country ISO 3166", "CC"), and a numbered
+    label ("Address 1", "ADDR_LINE_2") counts as neither label nor
+    data (see _is_numbered_label). Otherwise it is one when
     its ISIN cell is a bare label ("ISIN", "Kód ISIN"), whatever its
     name label says ("Název klienta"); when its name and ISIN cells
     are each empty or a label, one of them a label (not
@@ -669,11 +675,30 @@ def _looks_like_data(cell: str) -> bool:
 
     A postal code, a street number and an ISIN hold digits, and
     country_to_iso knows a country's name and passes a two-letter code
-    through. Label cells ("Země", "Country") are not checked.
+    through. Label cells ("Země", "Country") are not checked, and a
+    numbered label's digit ("Address 1") is not data.
     """
+    if _is_numbered_label(cell):
+        return False
     return (
         any(char.isdigit() for char in cell)
         or country_to_iso(cell) is not None
+    )
+
+
+def _is_numbered_label(cell: str) -> bool:
+    """Whether a cell is a label with a column number, as "Address 1".
+
+    Its words are labels and short numbers ("ADDR_LINE_1", "Adresa
+    2"). It is not counted as a label either: "Firma 1" may name the
+    first entity of a test list.
+    """
+    words = _words(_LABEL_NOTE.sub(" ", cell))
+    numbers = [word for word in words if word.isdigit()]
+    return (
+        0 < len(numbers) < len(words)
+        and all(len(word) <= _LABEL_NUMBER_DIGITS for word in numbers)
+        and all(word in _HEADER_WORDS or word.isdigit() for word in words)
     )
 
 

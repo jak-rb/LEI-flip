@@ -15,6 +15,7 @@ from email.utils import format_datetime
 
 import pytest
 import requests
+import urllib3
 
 import app as app_module
 from core import gleif, openfigi, storage
@@ -46,7 +47,7 @@ class _FakeSession:
         self.headers = {}
         self.calls = []
 
-    def get(self, url, params=None, timeout=None):
+    def get(self, url, params=None, timeout=None, stream=False):
         params = dict(params or {})
         self.calls.append({"params": params, "timeout": timeout})
         return self.handler(params, timeout)
@@ -55,13 +56,18 @@ class _FakeSession:
         pass
 
 
+def _raw(body):
+    """A reply body as requests streams it (see core.gleif.read_body)."""
+    return urllib3.HTTPResponse(body=io.BytesIO(body), preload_content=False)
+
+
 def _response(status=200, body=None, text=None, headers=None):
     """A requests.Response with a JSON (or raw ``text``) body."""
     response = requests.Response()
     response.status_code = status
     if text is None:
         text = json.dumps({"data": []} if body is None else body)
-    response._content = text.encode()
+    response.raw = _raw(text.encode())
     response.headers.update(headers or {})
     response.url = "https://gleif.invalid/api/v1/lei-records"
     return response
@@ -668,7 +674,7 @@ def test_gleif_that_is_slow_or_flaky_but_answers_fails_no_entity(
 def test_openfigi_request_stops_at_the_deadline(monkeypatch, clock):
     timeouts = []
 
-    def post(url, json=None, headers=None, timeout=None):
+    def post(url, json=None, headers=None, timeout=None, **kwargs):
         timeouts.append(timeout)
         clock.now += timeout
         raise requests.Timeout("read timed out")
@@ -685,4 +691,101 @@ def test_openfigi_request_stops_at_the_deadline(monkeypatch, clock):
     # With no deadline a timeout stays the usual soft failure.
     assert openfigi.resolve_isin_to_names(ISIN) == []
     assert timeouts[-1] == OPENFIGI_TIMEOUT
+
+
+class _TricklingBody(io.BytesIO):
+    """A reply body whose every socket read brings one byte, 1 s on."""
+
+    def __init__(self, data, clock):
+        super().__init__(data)
+        self.clock = clock
+
+    def read1(self, size=-1):
+        data = super().read1(1)
+        if data:
+            self.clock.now += 1
+        return data
+
+
+class _BrokenBody(io.BytesIO):
+    """A reply body whose connection drops before it comes."""
+
+    def read1(self, size=-1):
+        raise ConnectionResetError("connection reset mid-body")
+
+
+def _trickling(clock, body=None):
+    """A reply whose JSON body comes one byte a second."""
+    response = _response(body=body)
+    text = json.dumps({"data": []} if body is None else body).encode()
+    response.raw = urllib3.HTTPResponse(
+        body=_TricklingBody(text, clock), preload_content=False,
+    )
+    return response
+
+
+def test_gleif_reply_that_trickles_in_stops_at_the_deadline(session, clock):
+    # Each read brings a byte well within the request timeout, so only
+    # the deadline can stop the 12-byte reply, which takes 12 s.
+    session.handler = lambda params, timeout: _trickling(clock)
+    started = clock.now
+    with GleifClient() as gleif_client:
+        gleif_client.deadline = clock.now + 5
+        with pytest.raises(DeadlineExceeded):
+            gleif_client.is_answering()
+    assert clock.now - started == 5
+    # With no deadline the slow reply is simply read to its end.
+    with GleifClient() as gleif_client:
+        assert gleif_client.lookup_by_isin(ISIN) == []
+    assert clock.now - started == 5 + 12
+
+
+def test_run_call_with_a_trickling_gleif_ends_at_its_deadline(
+    client, session, clock,
+):
+    # A 200-byte reply at a byte a second outlasts the whole call.
+    session.handler = lambda params, timeout: _trickling(
+        clock, body={"data": [], "padding": "x" * 180},
+    )
+    job_id = _create_job(client, ["Alpha a.s.,,CZ"])
+
+    started = clock.now
+    response = _run(client, job_id)
+
+    assert clock.now - started <= _call_bound()
+    assert response.status_code == 200
+    body = response.get_json()
+    assert (body["searched"], body["done"]) == (0, False)
+    assert storage.get_search(job_id)["results"] == []
+
+
+def test_gleif_reply_cut_mid_body_is_retried_as_a_transport_error(
+    session, clock,
+):
+    replies = [_response(), _response()]
+    replies[0].raw = urllib3.HTTPResponse(
+        body=_BrokenBody(b""), preload_content=False,
+    )
+    session.handler = lambda params, timeout: replies.pop(0)
+    started = clock.now
+    with GleifClient() as gleif_client:
+        assert gleif_client.lookup_by_isin(ISIN) == []
+    assert len(session.calls) == 2
+    assert clock.now - started == gleif.INITIAL_BACKOFF
+
+
+def test_openfigi_reply_that_trickles_in_stops_at_the_deadline(
+    monkeypatch, clock,
+):
+    monkeypatch.setattr(
+        openfigi.requests, "post",
+        lambda *args, **kwargs: _trickling(
+            clock, body=[{"data": [{"name": "APPLE INC"}]}],
+        ),
+    )
+    started = clock.now
+    with pytest.raises(DeadlineExceeded):
+        openfigi.resolve_isin_to_names(ISIN, deadline=clock.now + 3)
+    assert clock.now - started == 3
+    assert openfigi.resolve_isin_to_names(ISIN) == ["APPLE INC"]
 

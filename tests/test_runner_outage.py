@@ -18,6 +18,7 @@ import types
 
 import pytest
 import requests
+import urllib3
 
 import app as app_module
 from core import gleif, openfigi, storage
@@ -55,7 +56,7 @@ class _FakeSession:
         self.headers = {}
         self.calls = []
 
-    def get(self, url, params=None, timeout=None):
+    def get(self, url, params=None, timeout=None, stream=False):
         params = dict(params or {})
         self.calls.append({"params": params, "timeout": timeout})
         return self.handler(params, timeout)
@@ -64,13 +65,18 @@ class _FakeSession:
         pass
 
 
+def _raw(body):
+    """A reply body as requests streams it (see core.gleif.read_body)."""
+    return urllib3.HTTPResponse(body=io.BytesIO(body), preload_content=False)
+
+
 def _response(status=200, body=None, text=None, headers=None):
     """A requests.Response with a JSON (or raw ``text``) body."""
     response = requests.Response()
     response.status_code = status
     if text is None:
         text = json.dumps({"data": []} if body is None else body)
-    response._content = text.encode()
+    response.raw = _raw(text.encode())
     response.headers.update(headers or {})
     response.url = "https://gleif.invalid/api/v1/lei-records"
     return response

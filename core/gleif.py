@@ -7,6 +7,7 @@ from the original async (httpx) client and rewritten with requests; the
 original's SQLite response cache is intentionally dropped.
 """
 
+import json
 import logging
 import math
 import re
@@ -16,6 +17,7 @@ from email.utils import parsedate_to_datetime
 from typing import Optional
 
 import requests
+import urllib3
 from unidecode import unidecode
 
 from .constants import GLEIF_BASE_URL, REQUEST_TIMEOUT
@@ -38,6 +40,9 @@ MAX_RETRY_AFTER = 300.0
 # Early) rather than a refused query, so they are retried like a
 # server error.
 _TRANSIENT_CLIENT_ERRORS = (408, 425)
+
+# Most bytes taken from a reply body at a time (see read_body).
+_READ_SIZE = 64 * 1024
 
 # The query of GleifClient.is_answering: a full-text search like the
 # first one of every name search, for a single record.
@@ -126,10 +131,45 @@ def _retry_after(resp: requests.Response, default: float) -> float:
     return min(max(seconds, 0.0), MAX_RETRY_AFTER)
 
 
-def _json_object(resp: requests.Response) -> Optional[dict]:
-    """The reply's JSON object, or None if the body is anything else."""
+def read_body(resp: requests.Response, deadline: Optional[float]) -> bytes:
+    """A streamed reply's body, read until it ends or the deadline.
+
+    requests' timeout bounds each socket read, not the whole reply, so
+    a body that trickles in byte by byte could outlast the deadline by
+    far. Each read here takes what one socket read brings, and the
+    deadline is checked in between: reading stops at most one request
+    timeout after it. The reply is closed either way.
+
+    Args:
+        resp: A reply requested with ``stream=True``.
+        deadline: Optional ``time.monotonic()`` value; None means none.
+
+    Raises:
+        DeadlineExceeded: If the deadline passes before the body ends.
+        requests.ConnectionError: If the connection fails mid-body.
+    """
+    chunks = []
     try:
-        data = resp.json()
+        while True:
+            chunk = resp.raw.read1(_READ_SIZE, decode_content=True)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise DeadlineExceeded("Reply cut off by the deadline")
+    except (urllib3.exceptions.HTTPError, OSError) as e:
+        # What requests would raise for the same failure while it
+        # reads the body itself.
+        raise requests.ConnectionError(e) from e
+    finally:
+        resp.close()
+    return b"".join(chunks)
+
+
+def _json_object(body: bytes) -> Optional[dict]:
+    """The body's JSON object, or None if it holds anything else."""
+    try:
+        data = json.loads(body)
     except ValueError:
         return None
     return data if isinstance(data, dict) else None
@@ -264,8 +304,9 @@ class GleifClient:
         Retry-After asks for. Any other 4xx is not retried. Every GLEIF
         failure is raised as a GleifApiError or one of its subclasses,
         so callers have a single exception type to catch. No attempt
-        or retry starts after the deadline, and each attempt's timeout
-        is cut to the time left.
+        or retry starts after the deadline, each attempt's timeout is
+        cut to the time left, and the reply is read only until the
+        deadline (see read_body).
 
         Args:
             path: API path appended to the GLEIF base URL.
@@ -296,8 +337,9 @@ class GleifClient:
             try:
                 resp = self._session.get(
                     url, params=params,
-                    timeout=min(self._timeout, time_left),
+                    timeout=min(self._timeout, time_left), stream=True,
                 )
+                body = read_body(resp, self.deadline)
             except requests.RequestException as e:
                 # Past the deadline, the likely cause is the timeout
                 # that was cut to fit it: a cut-off, not an outage.
@@ -335,7 +377,7 @@ class GleifClient:
                 raise GleifQueryError(
                     f"GLEIF API refused the query: HTTP {status}"
                 )
-            data = _json_object(resp) if status < 400 else None
+            data = _json_object(body) if status < 400 else None
             if data is not None:
                 return data
             problem = (

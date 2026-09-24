@@ -213,15 +213,19 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    PARTY_FULL_NAME/ISIN_IDENT, "ISIN (optional)", ...;
    `core/upload._is_header`): never when its ISIN is valid or it has at
    least as many data-looking cells (a digit, a country name or code) as
-   labels, so "Party City,,US,..." stays data; a one-cell title row above
-   a header is dropped with it. A row with a value over its
+   labels, so "Party City,,US,..." stays data; a numbered label
+   ("Address 1", "ADDR_LINE_2", `core/upload._is_numbered_label`) counts
+   as neither label nor data, so "Firma 1" still starts a list; a
+   one-cell title row above a header is dropped with it. A row with a value over its
    `InputEntity` length limit refuses the whole file, naming the row (as
    numbered in the file), the field and the limit - rows are never dropped
    or truncated silently. Parsing stops at the 101st entity row ("more
    than 100"). An `.xlsx` is read with `reset_dimensions()` and at most 6
    columns (50 in the semicolon-lines mode), through a guarded zip archive
-   that charges every read to a budget (50 MB unpacked, 500,000 XML nodes)
-   and refuses DTDs, so a small crafted file cannot tie the function up;
+   that charges every read to a budget (50 MB unpacked, 1,000,000 XML
+   nodes: room for some 500,000 shared strings from other sheets, about
+   5 s) and refuses DTDs, so a small crafted file cannot tie the function
+   up (the slowest crafted file is refused in about 9 s locally);
    `core/upload._load_workbook` relies on openpyxl 3.1.5 internals
    (`ExcelReader.archive`), so re-check it when upgrading openpyxl.
    Cells are read as Excel shows them: `_xHHHH_` escapes are decoded, and
@@ -264,8 +268,10 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    by itself; a cut-off counts as throttled when the lookup's own
    rate-limit waits (`GleifClient.rate_limit_waits`, reset per lookup)
    left it less than `RUN_DEADLINE_SECONDS - RUN_TIME_BUDGET_SECONDS` of
-   its own time. Known limit: requests' timeout bounds each socket read,
-   so a reply that trickles in byte by byte can outlast the deadline.
+   its own time. requests' timeout bounds each socket read, not a whole
+   reply, so GLEIF and OpenFIGI replies are streamed and read one socket
+   read at a time (`core/gleif.read_body`): a reply that trickles in stops
+   at most one request timeout past the deadline.
 4. When `done` the page reloads and the server renders the detailed tables.
 
 Each stored result row is the entity's `input`, its `match` (a `LookupResult`)
@@ -360,13 +366,17 @@ a match.
 
 The 2026-09-23 test run's backlog (the former `HANDOFF.md`) is done: every
 confirmed defect was fixed test-first, re-verified by an adversarial pass,
-and shipped. Open questions left for the user: raising the `.xlsx` read
-budget further (a workbook whose other sheets hold over about 250,000
-shared strings is refused with a clear message); whether digit labels such
-as "ADDR_LINE_1" should count as header labels (a header with as many of
-them as real labels is read as an entity); collapsing irregular whitespace
-inside multi-word legal forms, which would help recall but changes matching
-and needs the matcher audit; and the trickling-reply limit above.
+and shipped. Its four open questions were settled on 2026-09-24: the
+`.xlsx` node budget doubled, numbered header labels, streamed reply
+reads, and any whitespace between a multi-word legal form's words
+(`core/address._load_legal_forms`, so "s.  r. o." or a no-break space
+strips like "s. r. o."). That last one touches matching; instead of a
+live matcher audit it was checked offline: old and new `normalize_name`
+agree on all 26,220 names of the old tool's GLEIF cache, golden and
+precision corpora, and a tab or no-break-space copy of each now
+normalizes like the original, as does a doubled-space copy of all but 4
+of 4,859. Those 4 are left as is: a trailing parenthetical is only
+stripped up to 20 characters, and doubled spaces inside one push it over.
 
 Feature-complete and deployable. Single and bulk search run against live
 GLEIF through the job endpoints, every search is persisted under a `job_id`
@@ -374,8 +384,8 @@ GLEIF through the job endpoints, every search is persisted under a `job_id`
 validation workflow and the CSV/Excel downloads are real. `tests/` covers the
 store and the route flows with GLEIF faked; run it before every change to the
 web layer. Matching behaviour (thresholds in `core/constants.py`) is
-audit-validated and unchanged from the CodeNOW version - re-run the matcher
-audit before tuning it.
+audit-validated and unchanged from the CodeNOW version (apart from the
+legal-form whitespace above) - re-run the matcher audit before tuning it.
 
 An optional LLM-assisted step (e.g. helping disambiguate near-misses) is a
 possible next addition; it would plug in after `core/lookup.lookup_entity`

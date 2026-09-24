@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 import requests
+import urllib3
 
 import app as app_module
 from core import gleif, openfigi, storage
@@ -394,7 +395,7 @@ class _FakeSession:
         self.headers = {}
         self.calls = []
 
-    def get(self, url, params=None, timeout=None):
+    def get(self, url, params=None, timeout=None, stream=False):
         self.calls.append(dict(params or {}))
         return self.handler(dict(params or {}))
 
@@ -402,12 +403,17 @@ class _FakeSession:
         pass
 
 
+def _raw(body):
+    """A reply body as requests streams it (see core.gleif.read_body)."""
+    return urllib3.HTTPResponse(body=io.BytesIO(body), preload_content=False)
+
+
 def _response(status=200):
     response = requests.Response()
     response.status_code = status
-    response._content = json.dumps(
+    response.raw = _raw(json.dumps(
         {"data": []} if status == 200 else {"errors": [{"status": status}]}
-    ).encode()
+    ).encode())
     response.url = "https://gleif.invalid/api/v1/lei-records"
     return response
 

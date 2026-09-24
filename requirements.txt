@@ -4,6 +4,9 @@ Flask==3.0.3
 # max_form_memory_size, a Werkzeug attribute.
 Werkzeug==3.1.8
 requests==2.32.3
+# Imported by core/gleif.py, which reads reply bodies with
+# HTTPResponse.read1 (urllib3 2.3 and later).
+urllib3==2.8.0
 openpyxl==3.1.5
 pydantic==2.13.4
 rapidfuzz==3.14.5

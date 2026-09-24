@@ -417,7 +417,7 @@ def _assert_too_much_data_quickly(content):
 def test_a_row_of_countless_empty_cells_is_refused_quickly():
     # openpyxl builds every cell of a row before any column limit.
     rows_xml = (
-        _inline_row(1, "Tiny company") + "<row>" + "<c/>" * 600_000
+        _inline_row(1, "Tiny company") + "<row>" + "<c/>" * 1_200_000
         + "</row>"
     )
     _assert_too_much_data_quickly(_with_parts(_xlsx([["x"]]), {
@@ -426,7 +426,7 @@ def test_a_row_of_countless_empty_cells_is_refused_quickly():
 
 
 def test_countless_empty_rows_are_refused_quickly():
-    rows_xml = _inline_row(1, "Tiny company") + "<row/>" * 600_000
+    rows_xml = _inline_row(1, "Tiny company") + "<row/>" * 1_200_000
     _assert_too_much_data_quickly(_with_parts(_xlsx([["x"]]), {
         "xl/worksheets/sheet1.xml": _sheet_xml(rows_xml, "A1:B2"),
     }))
@@ -448,7 +448,7 @@ def _listed_sheets(count):
 def test_one_sheet_listed_many_times_is_refused_quickly():
     # Loading reads the part of every sheet entry; with no <dimension>
     # it reads all of it, every time.
-    rows_xml = _inline_row(1, "Tiny company") + "<row/>" * 20_000
+    rows_xml = _inline_row(1, "Tiny company") + "<row/>" * 40_000
     _assert_too_much_data_quickly(_with_parts(_xlsx([["x"]]), {
         "xl/worksheets/sheet1.xml": _sheet_xml(rows_xml),
         "xl/workbook.xml": _listed_sheets(40),
@@ -468,7 +468,7 @@ def test_shared_strings_under_any_part_name_are_bounded():
     # whatever the part is called.
     strings = (
         b'<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats'
-        b'.org/spreadsheetml/2006/main">' + b"<si><t>A</t></si>" * 300_000
+        b'.org/spreadsheetml/2006/main">' + b"<si><t>A</t></si>" * 600_000
         + b"</sst>"
     )
     override = (
@@ -480,6 +480,27 @@ def test_shared_strings_under_any_part_name_are_bounded():
         "xl/strings.xml": strings,
         "[Content_Types].xml": lambda old: old.replace(b"</Types>", override),
     }))
+
+
+def test_many_shared_strings_from_other_sheets_are_read():
+    # A big sheet of text beside the entity list: 400,000 shared
+    # strings were over the read budget until it was doubled.
+    strings = (
+        b'<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats'
+        b'.org/spreadsheetml/2006/main">' + b"<si><t>A</t></si>" * 400_000
+        + b"</sst>"
+    )
+    override = (
+        b'<Override PartName="/xl/strings.xml" ContentType="application/'
+        b'vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings'
+        b'+xml" /></Types>'
+    )
+    content = _with_parts(_xlsx([["Alfa a.s.", "", "CZ"]]), {
+        "xl/strings.xml": strings,
+        "[Content_Types].xml": lambda old: old.replace(b"</Types>", override),
+    })
+    entities = parse_upload("in.xlsx", content)
+    assert [entity.name for entity in entities] == ["Alfa a.s."]
 
 
 def test_one_chart_drawn_many_times_is_refused_quickly():
