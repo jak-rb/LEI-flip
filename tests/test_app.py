@@ -14,7 +14,8 @@ import pytest
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
 
-import app as app_module
+from app import app as flask_app
+from main import routes as app_module
 from core import storage
 from core.gleif import GleifApiError
 from core.models import CandidateSummary, LookupResult, MatchType
@@ -56,8 +57,8 @@ def _fake_lookup(entity, client):
 def client(monkeypatch):
     monkeypatch.setattr(app_module, "lookup_entity", _fake_lookup)
     monkeypatch.setattr(app_module, "GleifClient", _FakeGleifClient)
-    app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
 
 
 def _create_single(client, **fields):
@@ -84,8 +85,8 @@ def test_health(client):
 
 def test_index_and_static(client):
     assert client.get("/").status_code == 200
-    assert client.get("/styles.css").status_code == 200
-    assert client.get("/app.js").status_code == 200
+    assert client.get("/static/main/styles.css").status_code == 200
+    assert client.get("/static/main/app.js").status_code == 200
 
 
 def test_single_without_name_or_isin_is_rejected(client):

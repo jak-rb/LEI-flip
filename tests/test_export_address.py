@@ -25,7 +25,8 @@ import requests
 from openpyxl import load_workbook
 from unidecode import unidecode
 
-import app as app_module
+from app import app as flask_app
+from main import routes as app_module
 from core import address, export, isin, lookup, matcher
 from core.models import (
     CandidateSummary,
@@ -77,8 +78,8 @@ def _echo_lookup(entity, client):
 def client(monkeypatch):
     monkeypatch.setattr(app_module, "lookup_entity", _echo_lookup)
     monkeypatch.setattr(app_module, "GleifClient", _FakeGleifClient)
-    app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
 
 
 def _finished_job(client, **fields):
@@ -589,8 +590,8 @@ def test_run_with_a_whitespace_heavy_name_is_fast(monkeypatch):
     monkeypatch.setattr(lookup, "resolve_isin_to_names", _no_network)
     monkeypatch.setattr(isin, "resolve_isin_to_names", _no_network)
     monkeypatch.setattr(requests.Session, "request", _no_network)
-    app_module.app.config["TESTING"] = True
-    client = app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    client = flask_app.test_client()
 
     created = client.post("/api/jobs", data={
         "mode": "single", "entity_name": "A" + " " * 498 + "B",

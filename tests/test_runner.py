@@ -17,7 +17,8 @@ import pytest
 import requests
 import urllib3
 
-import app as app_module
+from app import app as flask_app
+from main import routes as app_module
 from core import gleif, openfigi, storage
 from core.constants import OPENFIGI_TIMEOUT, REQUEST_TIMEOUT
 from core.gleif import DeadlineExceeded, GleifApiError, GleifClient
@@ -112,8 +113,8 @@ def session(monkeypatch, clock):
 
 @pytest.fixture
 def client(session):
-    app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
 
 
 def _create_job(client, lines):
@@ -492,7 +493,8 @@ def _call_bound():
 
 
 def test_one_run_call_ends_far_under_the_function_time_limit():
-    # vercel.json lets app.py run for at most 300 s per invocation.
+    # A /run call must stay short: a proxy in front of the app (and
+    # CodeNOW's ingress) cuts off a request that runs too long.
     assert app_module.RUN_TIME_BUDGET_SECONDS < _call_bound() <= 300 / 2
 
 

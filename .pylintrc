@@ -1,0 +1,15 @@
+[MASTER]
+# The app runs with src/ on sys.path (py src/app.py; the platform serves
+# src/app.py), which is how "from main.routes import bp_main" resolves at
+# runtime. Give the build's pylint gate (pylint --disable=C,R,W ./src, run from
+# the repo root) the same view.
+#
+# This matters ONLY when src/ is itself a package (has __init__.py): pylint then
+# treats every module as src.<name>, and intra-src absolute imports report false
+# E0401 import-error — enough to fail the build on a working app. This scaffold
+# deliberately ships NO src/__init__.py, so the gate is green either way; the
+# hook stays as insurance for the day someone adds one.
+#
+# Keep this file. The GitHub web uploader silently strips dotfiles, which is
+# exactly how a real component lost its .pylintrc and turned the gate red.
+init-hook='import sys, os; sys.path.insert(0, os.path.join(os.getcwd(), "src"))'

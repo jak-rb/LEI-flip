@@ -79,6 +79,14 @@ function serverError(data) {
     return (currentLang() === "cs" && data.error_cs) || data.error || null;
 }
 
+// The app may be served under a URL prefix (CodeNOW's URL_PREFIX), so
+// every request goes to a path under the root the server renders into
+// <html data-app-root> ("/" when there is no prefix).
+function appUrl(path) {
+    return (document.documentElement.getAttribute("data-app-root") || "/")
+        + path;
+}
+
 function themeIsDark() {
     return document.documentElement.getAttribute("data-theme") === "dark";
 }
@@ -222,7 +230,7 @@ async function submitSearch(form, formData) {
         submitBtn.disabled = true;
     }
     try {
-        const response = await fetch("/api/jobs", {
+        const response = await fetch(appUrl("api/jobs"), {
             method: "POST",
             body: formData,
         });
@@ -244,7 +252,7 @@ async function submitSearch(form, formData) {
             return;
         }
         window.location.href =
-            "/results?job=" + encodeURIComponent(data.job_id);
+            appUrl("results?job=") + encodeURIComponent(data.job_id);
     } catch (error) {
         showFormError(form, t("unreachable"));
     } finally {
@@ -533,7 +541,7 @@ async function waitOutThrottle(els, retryAfter) {
 // carries on by itself.
 async function runJob(jobId) {
     const els = getResultEls();
-    const url = "/api/jobs/" + encodeURIComponent(jobId) + "/run";
+    const url = appUrl("api/jobs/") + encodeURIComponent(jobId) + "/run";
 
     for (;;) {
         let response;
@@ -564,7 +572,7 @@ async function runJob(jobId) {
 
         if (data.done) {
             window.location.replace(
-                "/results?job=" + encodeURIComponent(jobId),
+                appUrl("results?job=") + encodeURIComponent(jobId),
             );
             return;
         }
@@ -700,7 +708,7 @@ function setupValidation() {
         });
         showSaveFailed(false);
         try {
-            const response = await fetch("/api/decision", {
+            const response = await fetch(appUrl("api/decision"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ job_id: jobId, index, choice }),

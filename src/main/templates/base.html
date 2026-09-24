@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-app-root="{{ url_for('main.index') }}">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -27,20 +27,20 @@
             }
         }());
         </script>
-        <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+        <link rel="stylesheet" href="{{ url_for('main.static', filename='styles.css') }}">
         {% block head %}{% endblock %}
     </head>
     <body>
         <header class="topbar">
             <div class="brand">
                 <img class="brand-logo brand-logo-light"
-                     src="{{ url_for('static', filename='img/brand/logo-on-yellow-2x.png') }}"
+                     src="{{ url_for('main.static', filename='img/brand/logo-on-yellow-2x.png') }}"
                      alt="Raiffeisenbank">
                 <img class="brand-logo brand-logo-dark"
-                     src="{{ url_for('static', filename='img/brand/logo-on-black-2x.png') }}"
+                     src="{{ url_for('main.static', filename='img/brand/logo-on-black-2x.png') }}"
                      alt="Raiffeisenbank">
                 <span class="brand-divider" aria-hidden="true"></span>
-                <a class="brand-text" href="{{ url_for('index') }}">
+                <a class="brand-text" href="{{ url_for('main.index') }}">
                     <strong>LEI lookup</strong>
                     <small data-cs="Vyhledávání v GLEIF" data-en="GLEIF lookup">GLEIF lookup</small>
                 </a>
@@ -55,9 +55,9 @@
                         data-cs="Nahlásit chybu" data-en="Report bugs">Report bugs</button>
                 <button type="button" class="theme-btn" id="theme-toggle">
                     <img class="theme-icon theme-icon-to-dark"
-                         src="{{ url_for('static', filename='img/icons/moon.png') }}" alt="">
+                         src="{{ url_for('main.static', filename='img/icons/moon.png') }}" alt="">
                     <img class="theme-icon theme-icon-to-light"
-                         src="{{ url_for('static', filename='img/icons/sun.png') }}" alt="">
+                         src="{{ url_for('main.static', filename='img/icons/sun.png') }}" alt="">
                 </button>
                 <div class="lang-switch" role="group" aria-label="Language"
                      data-cs-aria-label="Jazyk" data-en-aria-label="Language">
@@ -214,6 +214,6 @@
             </form>
         </dialog>
 
-        <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+        <script src="{{ url_for('main.static', filename='app.js') }}" defer></script>
     </body>
 </html>

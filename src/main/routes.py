@@ -1,13 +1,15 @@
 
-"""LEI lookup web app: the Flask routes (and the Vercel entrypoint).
+"""LEI lookup routes, registered on bp_main (wired up in src/app.py).
 
-Vercel loads the ``app`` instance from this file and runs it as one
-function. A search runs as short, resumable steps: ``POST /api/jobs``
-stores the entities to look up, and the browser then calls
+A search runs as short, resumable steps: ``POST /api/jobs`` stores the
+entities to look up, and the browser then calls
 ``POST /api/jobs/<id>/run`` repeatedly, each call looking up the next
 few entities against GLEIF and saving their results, until the job is
-done. Every request therefore stays far below the function time limit,
-and a page refresh mid-search resumes where it left off.
+done. Every request therefore stays short (well inside a proxy's read
+timeout), and a page refresh mid-search resumes where it left off.
+
+Add new routes at the BOTTOM of this file. Never reuse a function
+name - a duplicate def is pylint E0102 and fails the build.
 """
 
 import logging
@@ -16,17 +18,15 @@ import secrets
 import time
 
 from flask import (
-    Flask,
-    Request,
     Response,
     abort,
-    jsonify,
     render_template,
     request,
     send_file,
 )
 from pydantic import ValidationError
 
+from main import bp_main
 from core import export, storage
 from core.gleif import (
     DeadlineExceeded,
@@ -38,58 +38,22 @@ from core.gleif import (
 )
 from core.lookup import lookup_entity
 from core.models import InputEntity, InputError, LookupResult, is_blank
-from core.notes import czech_note
 from core.upload import parse_upload
 
-logging.basicConfig(
-    level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
-)
 logger = logging.getLogger(__name__)
 
-# Static files live in public/. Vercel's CDN serves that folder at the
-# site root; pointing Flask's static route at it with no URL prefix
-# makes local runs serve the same paths (url_for('static', ...) yields
-# "/styles.css" in both).
-app = Flask(__name__, static_folder="public", static_url_path="")
-
-# Render a missing value as an empty cell rather than the text "None":
-# many stored fields (a candidate's street, an ISIN-only input's
-# country) are legitimately null.
-app.jinja_env.finalize = lambda value: "" if value is None else value
-
-# The results page shows each lookup note in English and in Czech.
-app.jinja_env.filters["czech_note"] = czech_note
-
-# Reject any request body larger than this. Flask raises HTTP 413
-# before the route runs, so an oversized upload is refused without
-# being read into memory. Vercel itself caps request bodies at 4.5 MB,
-# so the limit sits just under that.
+#: The largest request body accepted (src/app.py sets it as the app's
+#: MAX_CONTENT_LENGTH and as its request class's form-field limit). The
+#: page and its error messages say "max 4 MB".
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024  # 4 MiB
-app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
 
-class _UploadCapRequest(Request):
-    """Flask's request, with form fields allowed up to the upload cap.
-
-    Werkzeug refuses a form field (or a urlencoded body) over 500 kB
-    with a 413 far below MAX_UPLOAD_BYTES, and Flask 3.0 has no config
-    key for that limit. Werkzeug's cap of 1000 form parts stays: the
-    page sends at most seven, so only a crafted request gets past it.
-    """
-
-    max_form_memory_size = MAX_UPLOAD_BYTES
-
-
-app.request_class = _UploadCapRequest
-
-
-@app.errorhandler(413)
+@bp_main.app_errorhandler(413)
 def request_too_large(error):
     """Refuse an oversized request with a JSON error the page can show.
 
     Covers a body over MAX_UPLOAD_BYTES and more form parts than
-    Werkzeug parses. Vercel's own limit (bodies over 4.5 MB) answers
-    before the app runs, with plain text.
+    Werkzeug parses.
     """
     return {
         "error": "The request is too large (max 4 MB).",
@@ -111,7 +75,7 @@ RUN_TIME_BUDGET_SECONDS = 40
 #: The GLEIF client's deadline, in seconds from the start of a /run
 #: call: no request or retry starts after it and each request's
 #: timeout is cut to fit it, so a call ends by then even when GLEIF is
-#: slow, far under the function's time limit. It lies well past the
+#: slow. It lies well past the
 #: budget because one lookup makes up to about 20 requests, which a
 #: slow or flaky GLEIF can stretch past the budget while still
 #: answering every one.
@@ -146,18 +110,12 @@ GLEIF_TOO_SLOW_NOTE = (
 )
 
 
-@app.route("/health")
-def health():
-    """Liveness probe."""
-    return jsonify(status="UP"), 200
-
-
-@app.route("/")
+@bp_main.route("/")
 def index():
     return render_template("index.html")
 
 
-@app.route("/admin")
+@bp_main.route("/admin")
 def admin():
     """Unlinked page dumping the whole searches table (no auth).
 
@@ -308,7 +266,7 @@ def _bulk_entities() -> list[InputEntity]:
     return parse_upload(filename, upload.read())
 
 
-@app.route("/api/jobs", methods=["POST"])
+@bp_main.route("/api/jobs", methods=["POST"])
 def create_job():
     """Create a search job from the single form or a bulk upload.
 
@@ -444,7 +402,7 @@ def _lookup_row(
     return _result_row(entity, result, closest)
 
 
-@app.route("/api/jobs/<job_id>/run", methods=["POST"])
+@bp_main.route("/api/jobs/<job_id>/run", methods=["POST"])
 def run_job(job_id: str):
     """Look up the next few pending entities of a job and save them.
 
@@ -535,7 +493,7 @@ def run_job(job_id: str):
     return progress
 
 
-@app.route("/download/csv")
+@bp_main.route("/download/csv")
 def download_csv():
     """Serve a stored search as a CSV attachment (keyed by ?job=)."""
     search = storage.get_search(request.args.get("job", ""))
@@ -548,7 +506,7 @@ def download_csv():
     )
 
 
-@app.route("/download/excel")
+@bp_main.route("/download/excel")
 def download_excel():
     """Serve a stored search as an Excel attachment (keyed by ?job=)."""
     search = storage.get_search(request.args.get("job", ""))
@@ -653,7 +611,7 @@ def _partition(results: list) -> dict:
     }
 
 
-@app.route("/results")
+@bp_main.route("/results")
 def results():
     """Render the results page for a stored search.
 
@@ -681,7 +639,7 @@ def results():
     )
 
 
-@app.route("/api/decision", methods=["POST"])
+@bp_main.route("/api/decision", methods=["POST"])
 def decision():
     """Record the user's manual match choice for one searched entity.
 
@@ -733,8 +691,4 @@ def decision():
             "unmatched": groups["unmatched_count"],
         }
     return reply
-
-
-if __name__ == "__main__":
-    app.run(port=8080)
 

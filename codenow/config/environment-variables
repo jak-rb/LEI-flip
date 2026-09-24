@@ -1,0 +1,20 @@
+# Default runtime environment variables for this component.
+# Values here are DEFAULTS/documentation - real secrets arrive from CodeNOW
+# service bindings. Never commit a credential.
+
+# The external route the component is published under. Empty = served at
+# root. Must match the route CodeNOW publishes the component on.
+URL_PREFIX=/lei-lookup
+
+# Set a stable value once anything depends on sessions (see src/config.py).
+SECRET_KEY=
+
+# Search store (core/storage.py). Unset, it is a SQLite file under the
+# system temp dir, which is lost on restart: point LEI_DB_PATH at a
+# mounted volume to keep the 30-day history. DATABASE_URL (or
+# POSTGRES_URL) selects a Postgres database instead.
+# LEI_DB_PATH=/data/lei_lookup.db
+# DATABASE_URL=
+
+# Optional OpenFIGI API key: a higher rate limit for the ISIN fallback.
+# OPENFIGI_API_KEY=

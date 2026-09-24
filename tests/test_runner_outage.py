@@ -20,7 +20,8 @@ import pytest
 import requests
 import urllib3
 
-import app as app_module
+from app import app as flask_app
+from main import routes as app_module
 from core import gleif, openfigi, storage
 from core.gleif import DeadlineExceeded, GleifClient, GleifRateLimited
 
@@ -142,8 +143,8 @@ def session(monkeypatch, clock):
 
 @pytest.fixture
 def client(session):
-    app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
 
 
 def _create_job(client, lines):

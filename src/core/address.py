@@ -13,8 +13,10 @@ _COUNTRY_MAP: Optional[dict[str, str]] = None
 _LEGAL_FORMS: Optional[list[str]] = None
 _LEGAL_FORM_PATTERNS: Optional[list[re.Pattern]] = None
 
-# Project data folder (../data relative to this package).
-DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+# The lookup tables live with the component's other data files, in
+# src/main/data/ (../main/data relative to this package), resolved from
+# this file because the deployed working directory is not guaranteed.
+DATA_DIR = Path(__file__).resolve().parents[1] / "main" / "data"
 
 # Pre-compiled patterns for normalize_address_part.
 _RE_STREET_ABBR = re.compile(r'\bstr\.?\b', re.IGNORECASE)

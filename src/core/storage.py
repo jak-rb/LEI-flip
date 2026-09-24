@@ -1,13 +1,14 @@
 
-"""Store for per-search results: Postgres on Vercel, SQLite locally.
+"""Store for per-search results: SQLite, or Postgres when configured.
 
 One ``searches`` table holds one row per search - its query (the
 entities to look up) and its results (one row per entity looked up so
 far) - pruned after a retention window. The backend is picked from the
 environment: when ``DATABASE_URL`` (or ``POSTGRES_URL``) is set, the
-store is that Postgres database (the Neon database attached to the
-Vercel project); otherwise it is a local SQLite file, so the app runs
-with no setup during development and in tests.
+store is that Postgres database; otherwise it is a SQLite file at
+``LEI_DB_PATH`` (on CodeNOW, a mounted volume - the image filesystem is
+read-only) or under the system temp dir, so the app runs with no setup
+during development and in tests.
 
 Both backends share one DDL and one set of statements: JSON payloads
 are stored as text, timestamps as ISO-8601 UTC strings (which sort
@@ -25,8 +26,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
-#: Postgres connection string. The Neon integration sets DATABASE_URL
-#: on the Vercel project; with neither variable set the store is SQLite.
+#: Postgres connection string (a CodeNOW service binding, say); with
+#: neither variable set the store is SQLite.
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get(
     "POSTGRES_URL"
 )
@@ -34,8 +35,9 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get(
 #: Per-search rows older than this are deleted on the next write.
 SEARCH_RETENTION_DAYS = 30
 
-#: A job id as ``app.create_job`` mints it (``secrets.token_hex(16)``).
-#: Any other id is refused before it reaches the database: psycopg
+#: A job id as ``main.routes.create_job`` mints it
+#: (``secrets.token_hex(16)``). Any other id is refused before it
+#: reaches the database: psycopg
 #: raises on a NUL in a text parameter, which made such ids a 500.
 _JOB_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 
@@ -57,8 +59,9 @@ CREATE TABLE IF NOT EXISTS searches (
 )
 """
 
-# Whether the schema has been ensured in this process (once per cold
-# start on Vercel).
+# Whether the schema has been ensured in this process (once per
+# process, on first use - never at import, so a slow database cannot
+# keep /health from answering).
 _schema_ready = False
 
 

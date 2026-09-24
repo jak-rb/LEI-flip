@@ -22,7 +22,10 @@ import logging
 import re
 import xml.parsers.expat
 import zipfile
-from collections.abc import Iterable, Iterator
+# From typing, not collections.abc: collections.abc is a frozen module
+# from Python 3.13 on, which pylint 3.2 cannot import (a false E0401
+# that fails the CodeNOW build gate).
+from typing import Iterable, Iterator
 
 from openpyxl.chartsheet import Chartsheet
 from openpyxl.reader.excel import ExcelReader
@@ -154,7 +157,7 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
     if not content:
         raise InputError("The file is empty.", "Soubor je prázdný.")
 
-    # The part from the last dot, as app.py checks it: to pathlib, a
+    # The part from the last dot, as main/routes.py checks it: to pathlib, a
     # file named just ".csv" has no extension.
     _, dot, ext = filename.lower().rpartition(".")
     ext = dot + ext

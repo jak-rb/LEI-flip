@@ -1,0 +1,39 @@
+{
+    "agent": {
+        "flush_connections": true,
+        "namespace": "<environment-name>",
+        "log_level": "debug"
+    },
+    "feature": {
+        "network": {
+            "incoming": {
+                "mode": "steal",
+                "http_filter": {
+                    "path_filter": "^(?!/health)"
+                }
+            },
+            "outgoing": {
+                "tcp": true,
+                "udp": true,
+                "filter": {
+                  "local": ["127.0.0.1", "localhost"]
+                }
+            },
+            "dns": {
+                "enabled": true
+            }
+        },
+        "fs": {
+            "mode": "read"
+        },
+        "env": true
+    },
+    "kubeconfig": "path/to/kubeconfig",
+    "target": {
+        "path": {
+            "deployment": "lei-lookup",
+            "container": "lei-lookup"
+        },
+        "namespace": "<environment-name>"
+    }
+}

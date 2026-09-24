@@ -16,7 +16,8 @@ import pytest
 from openpyxl import Workbook, load_workbook
 from pydantic import ValidationError
 
-import app as app_module
+from app import app as flask_app
+from main import routes as app_module
 from core import storage
 from core.models import InputEntity, InputError, LookupResult
 from core.upload import parse_upload
@@ -65,8 +66,8 @@ def _fake_lookup(entity, client):
 def client(monkeypatch):
     monkeypatch.setattr(app_module, "lookup_entity", _fake_lookup)
     monkeypatch.setattr(app_module, "GleifClient", _FakeGleifClient)
-    app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
 
 
 def _lines(names, delimiter=";"):

@@ -2,7 +2,7 @@
 """Czech versions of the lookup notes, for the results page.
 
 The lookup code writes its notes in English (core/lookup.py,
-core/isin.py and the failed-lookup notes in app.py), and they are
+core/isin.py and the failed-lookup notes in main/routes.py), and they are
 stored and exported that way. The results page shows every note in
 both languages: ``czech_note`` maps a known English note to Czech,
 keeping its parameters (ISINs, names, addresses, scores), and returns

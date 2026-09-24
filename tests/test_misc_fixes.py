@@ -27,7 +27,8 @@ from pathlib import Path
 import pytest
 from openpyxl import load_workbook
 
-import app as app_module
+from app import app as flask_app
+from main import routes as app_module
 from core import address, export, models, storage
 from core.models import LookupResult
 
@@ -248,8 +249,8 @@ def client(monkeypatch):
 
     monkeypatch.setattr(app_module, "lookup_entity", fake_lookup)
     monkeypatch.setattr(app_module, "GleifClient", FakeGleifClient)
-    app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
 
 
 def test_single_form_uses_the_models_blank_rule():
@@ -271,7 +272,9 @@ def test_long_invisible_name_with_an_isin_is_an_isin_only_search(client):
 # ---- Disabled decision buttons ----
 
 def test_hover_rules_skip_disabled_decision_buttons():
-    css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    css = (ROOT / "src" / "main" / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
     selectors = [
         selector.strip()

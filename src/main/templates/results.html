@@ -8,7 +8,7 @@
        data-cs="Žádné výsledky k zobrazení. Odkaz mohl vypršet (výsledky uchováváme 30 dní), nebo zatím neproběhlo žádné vyhledávání."
        data-en="No results to show. This link may have expired (saved results are kept for 30 days), or no search has been run yet.">No results to show. This link may have expired (saved results are kept for 30 days), or no search has been run yet.</p>
     <p>
-        <a class="btn btn-result btn-detailed" href="{{ url_for('index') }}">
+        <a class="btn btn-result btn-detailed" href="{{ url_for('main.index') }}">
             &larr; <span data-cs="Zpět na vyhledávání" data-en="Back to search">Back to search</span>
         </a>
     </p>
@@ -64,7 +64,7 @@
         </div>
 
         <div class="results-actions results-actions-split">
-            <a class="btn btn-result btn-detailed" href="{{ url_for('index') }}">
+            <a class="btn btn-result btn-detailed" href="{{ url_for('main.index') }}">
                 &larr; <span data-cs="Zpět na vyhledávání" data-en="Back to search">Back to search</span>
             </a>
             <div class="download-group">
@@ -75,10 +75,10 @@
                         data-cs="Stáhnout Excel" data-en="Download Excel">Download Excel</button>
                 {% else %}
                 <a class="btn btn-result"
-                   href="{{ url_for('download_csv') }}?job={{ search.job_id }}"
+                   href="{{ url_for('main.download_csv') }}?job={{ search.job_id }}"
                    data-cs="Stáhnout CSV" data-en="Download CSV">Download CSV</a>
                 <a class="btn btn-result"
-                   href="{{ url_for('download_excel') }}?job={{ search.job_id }}"
+                   href="{{ url_for('main.download_excel') }}?job={{ search.job_id }}"
                    data-cs="Stáhnout Excel" data-en="Download Excel">Download Excel</a>
                 {% endif %}
             </div>

@@ -23,7 +23,8 @@ import pytest
 import requests
 import urllib3
 
-import app as app_module
+from app import app as flask_app
+from main import routes as app_module
 from core import gleif, openfigi, storage
 from core import isin as core_isin, lookup as core_lookup
 from core.gleif import GleifClient, GleifQueryError
@@ -52,8 +53,8 @@ def _fake_lookup(entity, client):
 def client(monkeypatch):
     monkeypatch.setattr(app_module, "lookup_entity", _fake_lookup)
     monkeypatch.setattr(app_module, "GleifClient", _FakeGleifClient)
-    app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
 
 
 def _create_single(client, **fields):
@@ -465,8 +466,8 @@ def test_gleif_denying_access_answers_503_and_keeps_the_entity(
             denied["on"] = True
         return _response(status) if denied["on"] else _response()
     session.handler = handler
-    app_module.app.config["TESTING"] = True
-    client = app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    client = flask_app.test_client()
     content = b"Alpha a.s.,,CZ\nDenied a.s.,,CZ\nGamma a.s.,,CZ"
     created = client.post(
         "/api/jobs",

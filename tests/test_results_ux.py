@@ -18,7 +18,8 @@ from pathlib import Path
 
 import pytest
 
-import app as app_module
+from app import app as flask_app
+from main import routes as app_module
 from core import isin as isin_module
 from core import lookup as lookup_module
 from core.models import (
@@ -277,8 +278,8 @@ def _fake_lookup(entity, client):
 def client(monkeypatch):
     monkeypatch.setattr(app_module, "lookup_entity", _fake_lookup)
     monkeypatch.setattr(app_module, "GleifClient", _FakeGleifClient)
-    app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
 
 
 def _finished_job(client, lines):
@@ -478,7 +479,9 @@ def test_not_found_replies_are_bilingual(client):
 
 
 def test_decision_buttons_have_a_disabled_look():
-    css = (ROOT / "public" / "styles.css").read_text(encoding="utf-8")
+    css = (ROOT / "src" / "main" / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
     rules = re.findall(r"([^{}]+)\{([^}]*)\}", css)
     looks = [
         body for selectors, body in rules
@@ -491,7 +494,7 @@ def test_decision_buttons_have_a_disabled_look():
 
 # ---- The stepper's saves, driven in Node ----
 
-_APP_JS = ROOT / "public" / "app.js"
+_APP_JS = ROOT / "src" / "main" / "static" / "app.js"
 _SAVE_HARNESS = r"""
 "use strict";
 const fs = require("fs");
@@ -690,7 +693,7 @@ _needs_node = pytest.mark.skipif(
 
 
 def _run_saves(tmp_path, lang, steps):
-    """Run the save harness on public/app.js; return each step seen."""
+    """Run the save harness on app.js; return each step seen."""
     harness = tmp_path / "save_harness.js"
     harness.write_text(_SAVE_HARNESS, encoding="utf-8")
     finished = subprocess.run(
@@ -770,9 +773,9 @@ def test_failed_save_in_czech_then_a_good_save_updates_the_card(tmp_path):
 
 def test_card_state_texts_match_the_template():
     # The script words the card's state line as results.html does.
-    template = (ROOT / "templates" / "results.html").read_text(
-        encoding="utf-8",
-    )
+    template = (
+        ROOT / "src" / "main" / "templates" / "results.html"
+    ).read_text(encoding="utf-8")
     script = _APP_JS.read_text(encoding="utf-8")
     for key, state in (
         ("stateReview", "review"),

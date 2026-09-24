@@ -17,7 +17,8 @@ from pathlib import Path
 
 import pytest
 
-import app as app_module
+from app import app as flask_app
+from main import routes as app_module
 from core import storage
 from core.models import CandidateSummary, LookupResult, MatchType
 
@@ -62,11 +63,11 @@ def _fake_lookup(entity, client):
 def client(monkeypatch):
     monkeypatch.setattr(app_module, "lookup_entity", _fake_lookup)
     monkeypatch.setattr(app_module, "GleifClient", _FakeGleifClient)
-    app_module.app.config["TESTING"] = True
+    flask_app.config["TESTING"] = True
     # A crash must show up as the 500 a browser would get, not as an
     # exception raised into the test.
-    monkeypatch.setitem(app_module.app.config, "PROPAGATE_EXCEPTIONS", False)
-    return app_module.app.test_client()
+    monkeypatch.setitem(flask_app.config, "PROPAGATE_EXCEPTIONS", False)
+    return flask_app.test_client()
 
 
 def _finished_bulk_job(client, names):
@@ -357,10 +358,13 @@ def test_decision_racing_run_cannot_shrink_the_results(monkeypatch):
     assert len(storage.get_search(job_id)["results"]) == 10
 
 
-# The stepper tests drive public/app.js in Node against a tiny fake DOM
+# The stepper tests drive src/main/static/app.js in Node against a tiny fake DOM
 # holding three records to validate, with a /api/decision reply that
 # lands only when the harness releases it.
-_APP_JS = Path(__file__).resolve().parent.parent / "public" / "app.js"
+_APP_JS = (
+    Path(__file__).resolve().parent.parent
+    / "src" / "main" / "static" / "app.js"
+)
 _STEPPER_HARNESS = r"""
 "use strict";
 const fs = require("fs");
@@ -483,7 +487,7 @@ function fetch(url, options) {
 
 
 def _run_stepper(tmp_path, *args):
-    """Run the stepper harness on public/app.js; return what it saw."""
+    """Run the stepper harness on app.js; return what it saw."""
     harness = tmp_path / "stepper_harness.js"
     harness.write_text(_STEPPER_HARNESS, encoding="utf-8")
     finished = subprocess.run(

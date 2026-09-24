@@ -110,92 +110,115 @@ or `.txt` file of entities.
 
 It is a lean rebuild based on the core of the original LEI lookup tool created
 by Jakub Schrimpel: the precision-first matcher and GLEIF/ISIN resolution are
-kept as-is, and the app now lives on Vercel (Python runtime, Neon Postgres)
-with no dependency on the bank's CodeNOW platform, which it was first built
-for.
+kept as-is. This branch (`codenow`) packages it as a CodeNOW Flask component
+on the blueprint scaffold of the `codenow-flask` plugin, so it can run on the
+bank's CodeNOW platform again, which it was first built for; the `vercel`
+branch (and `main`) hold the same app laid out for Vercel, where it is live.
 
 ### Tech stack
 
-- **Python 3.12** on Vercel's Python runtime (pinned in `.python-version`;
-  locally any 3.12+ works)
-- **pip** with a pinned `requirements.txt` (runtime) and
-  `requirements-dev.txt` (adds pytest)
-- **Flask** for the web layer and Jinja2 templates; Vercel loads the `app`
-  instance from `app.py` with zero configuration
-- **psycopg[binary]** for the Postgres (Neon) search store on Vercel; the
-  same module falls back to stdlib **sqlite3** locally (see `core/storage.py`)
+- **Python 3.12** in the CodeNOW build and runtime images (`build.image` /
+  `runtime.image` in `.codenow.yaml`: `python:3.12.6-slim-bullseye`);
+  locally any 3.12+ works
+- **pip** with one pinned `requirements.txt`: CodeNOW installs only that
+  file, so it carries pylint, pytest and coverage too
+- **Flask** for the web layer and Jinja2 templates, as a blueprint component:
+  the `create_app()` factory in `src/app.py` registers `bp_main`
+  (`src/main/`) under `URL_PREFIX`; **waitress** serves the module-level
+  `app`
+- **python-json-logger** for the JSON logs `codenow/config/log-config.json`
+  configures
+- stdlib **sqlite3** for the search store, or **psycopg[binary]** for
+  Postgres when `DATABASE_URL` is set (see `core/storage.py`)
 - **openpyxl** for reading bulk `.xlsx` uploads and writing the Excel export
 - **pydantic** for the core data models (`InputEntity`, `LookupResult`, ...)
 - **requests** for the synchronous HTTP calls to GLEIF and OpenFIGI
 - **rapidfuzz** for fuzzy name/address scoring, and **unidecode** for
   stripping diacritics during normalization
 - Plain HTML/CSS frontend with vanilla JavaScript, no framework. Static files
-  live in `public/`, which Vercel's CDN serves at the site root; Flask is
-  configured to serve the same folder at the same paths locally.
+  live in the blueprint's `src/main/static/`, served at
+  `<URL_PREFIX>/static/main/`.
 
 ### Commands
 
 From the project root:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\pip install -r requirements-dev.txt
+py -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
 
-.venv\Scripts\python app.py            # dev server on http://localhost:8080
+.venv\Scripts\python src\app.py       # waitress on http://127.0.0.1:8080/
 .venv\Scripts\python -m pytest -q      # test suite (SQLite store, faked GLEIF)
+.venv\Scripts\python -m pylint --disable=C,R,W src   # EXACTLY the build gate
 
-vercel deploy                          # preview deployment
-vercel deploy --prod                   # production deployment
-vercel env pull .env.local             # fetch DATABASE_URL etc. for local use
+# The plugin's readiness check (pylint gate, lint coverage, /health + /,
+# pytest) calls `py`; with the venv active `py` runs the venv's Python.
+.venv\Scripts\Activate.ps1; ./scripts/check.ps1   # must print READY TO COMMIT
 ```
 
-Run the app from the project root (not from a subfolder): the `core`
-package, `templates/`, `public/` and `data/` all resolve from there. With no
-`DATABASE_URL` in the environment the store is a local SQLite file, so a
-fresh clone runs with no setup.
+Run pylint from the project root, or it never loads `.pylintrc`. The app
+resolves its files from its own location (`src/main/data/`, the log config
+under `codenow/config/`), so the working directory does not matter. With
+no `DATABASE_URL` the store is a local SQLite file, so a fresh clone runs
+with no setup. Locally `URL_PREFIX` is unset and the app answers at `/`;
+set it to run as deployed - the suite passes either way (`tests/conftest.py`
+sends the tests' paths under it). In Git Bash, set it with
+`MSYS_NO_PATHCONV=1 MSYS2_ENV_CONV_EXCL='*'`, or Bash turns `/lei-lookup`
+into a Windows path.
 
 ### Project structure
 
 ```
-app.py             # Flask app + routes (entry point; Vercel loads `app`)
-core/              # backend lookup logic (ported + simplified from the original)
-  constants.py     # matcher thresholds and GLEIF settings (plain constants)
-  models.py        # pydantic data models (InputEntity, GleifCandidate, ...)
-  address.py       # name/address normalization and country -> ISO conversion
-  matcher.py       # precision-first fuzzy name + address scoring
-  gleif.py         # synchronous GLEIF API client (requests, retry/backoff)
-  lookup.py        # single-entity pipeline: search -> score -> classify
-  isin.py          # ISIN validation + LEI resolution/corroboration
-  openfigi.py      # OpenFIGI client: ISIN -> issuer name(s) (ISIN fallback)
-  storage.py       # search store: one `searches` table on Postgres or SQLite
-  export.py        # build CSV / Excel from a search (reflects manual decisions)
-  upload.py        # parse an uploaded .xlsx/.csv/.tsv/.txt into entities
-data/              # read-only lookup tables (committed)
-  country_mapping.json  # country name (cs/en) -> ISO alpha-2 code
-  legal_forms.txt       # legal-form suffixes stripped before name matching
-templates/         # Jinja2 templates
-  base.html        # shared layout (header, Help/Report-bugs dialogs, page shell)
-  index.html       # single + bulk lookup forms (submit creates a job, goes to /results)
-  results.html     # /results: summary card (live while running), stepper, tables
-  admin.html       # hidden /admin page: full dump of the searches table (no auth)
-public/            # static files, served by Vercel's CDN at the site root
-  styles.css       # all styling
-  app.js           # vanilla JS: dialogs, forms, job runner loop, validation stepper
-  img/             # RB logos (yellow-bar and black-bar variants) + theme icons
-tests/             # pytest: storage round-trips + route flows with GLEIF faked
-requirements.txt   # pinned runtime dependencies
-requirements-dev.txt
-vercel.json        # function config: maxDuration 300 s, files excluded from the bundle
-.python-version    # 3.12
-.vercelignore      # keeps .venv, tests, docs out of the upload
-docs/              # project docs (present on disk, gitignored)
+src/                 # everything the build lints and the platform runs
+  app.py             # create_app() factory, /health, JSON logging, B3 echo
+  config.py          # GlobalConstraints: URL_PREFIX, SECRET_KEY from env
+  core/              # backend lookup logic (ported + simplified from the original)
+    constants.py     # matcher thresholds and GLEIF settings (plain constants)
+    models.py        # pydantic data models (InputEntity, GleifCandidate, ...)
+    address.py       # name/address normalization and country -> ISO conversion
+    matcher.py       # precision-first fuzzy name + address scoring
+    gleif.py         # synchronous GLEIF API client (requests, retry/backoff)
+    lookup.py        # single-entity pipeline: search -> score -> classify
+    isin.py          # ISIN validation + LEI resolution/corroboration
+    openfigi.py      # OpenFIGI client: ISIN -> issuer name(s) (ISIN fallback)
+    notes.py         # Czech versions of the lookup notes
+    storage.py       # search store: one `searches` table on SQLite or Postgres
+    export.py        # build CSV / Excel from a search (reflects manual decisions)
+    upload.py        # parse an uploaded .xlsx/.csv/.tsv/.txt into entities
+  main/              # the bp_main blueprint
+    __init__.py      # bp_main; owns templates/, static/ (at /static/main) and data/
+    routes.py        # every route except /health; new routes go at the BOTTOM
+    templates/       # Jinja2 templates
+      base.html      # shared layout (header, Help/Report-bugs dialogs, page shell)
+      index.html     # single + bulk lookup forms (submit creates a job, goes to /results)
+      results.html   # /results: summary card (live while running), stepper, tables
+      admin.html     # hidden /admin page: full dump of the searches table (no auth)
+    static/
+      styles.css     # all styling
+      app.js         # vanilla JS: dialogs, forms, job runner loop, validation stepper
+      img/           # RB logos (yellow-bar and black-bar variants) + theme icons
+    data/            # read-only lookup tables (committed)
+      country_mapping.json  # country name (cs/en) -> ISO alpha-2 code
+      legal_forms.txt       # legal-form suffixes stripped before name matching
+tests/               # pytest: storage, route flows with GLEIF faked, smoke tests
+scripts/check.ps1    # the plugin's readiness check (copied verbatim)
+codenow/config/      # config.yaml, log-config.json, environment-variables
+nginx/app.conf       # from the platform scaffold; leave it alone
+.codenow.yaml        # the component's build/runtime images, pipelines, port 80
+.pylintrc            # puts src/ on pylint's path (insurance for the build gate)
+sonar-project.properties  # coverage report path for the static-analysis stage
+.run/                # PyCharm run config + mirrord config (from the component)
+requirements.txt     # pinned dependencies, runtime + pylint + pytest
+docs/                # project docs (present on disk, gitignored)
 ```
 
 ### Backend
 
-**A search is a job run in short steps.** Vercel runs the app as a function
-with a hard time limit (300 s on Hobby) and no long-lived process, so the old
-single streaming request that looked up a whole bulk file is gone. Instead:
+**A search is a job run in short steps.** The app was rebuilt for Vercel,
+which runs it as a function with a hard time limit, so the old single
+streaming request that looked up a whole bulk file is gone; on CodeNOW the
+short steps keep requests short behind the ingress and let a reload resume
+a search. Instead:
 
 1. `POST /api/jobs` validates the input (single form fields, or an uploaded
    `.xlsx`/`.csv`/`.tsv`/`.txt` parsed by `core/upload.py` - positional
@@ -224,7 +247,7 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    columns (50 in the semicolon-lines mode), through a guarded zip archive
    that charges every read to a budget (50 MB unpacked, 1,000,000 XML
    nodes: room for some 500,000 shared strings from other sheets, about
-   5 s) and refuses DTDs, so a small crafted file cannot tie the function
+   5 s) and refuses DTDs, so a small crafted file cannot tie the server
    up (the slowest crafted file is refused in about 9 s locally);
    `core/upload._load_workbook` relies on openpyxl 3.1.5 internals
    (`ExcelReader.archive`), so re-check it when upgrading openpyxl.
@@ -238,7 +261,8 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    cp1250 (undefined bytes become U+FFFD). The extension is the part from
    the last dot, so a file named just ".csv" is read.
 2. The browser navigates to `/results?job=<id>`. For an unfinished job the
-   page renders the summary card in its running state and `public/app.js`
+   page renders the summary card in its running state and
+   `src/main/static/app.js`
    calls `POST /api/jobs/<id>/run` in a loop.
 3. Each `/run` call looks up the next pending entities (at most
    `RUN_CHUNK_SIZE`, stopping early once `RUN_TIME_BUDGET_SECONDS` have
@@ -326,41 +350,67 @@ a match.
 ### Frontend
 
 - **Branding.** Raiffeisenbank brand palette only (rules in the header
-  comment of `public/styles.css`): one yellow, Off Black, Warm Grey
+  comment of `src/main/static/styles.css`): one yellow, Off Black, Warm Grey
   neutrals, system font stack, no webfonts or CDN assets.
 - **Theme.** Light/dark lives on `<html data-theme>`. An inline script
-  in `templates/base.html` resolves it before first paint: the explicit
+  in `src/main/templates/base.html` resolves it before first paint: the explicit
   choice in `localStorage["leiTheme"]`, else the OS colour scheme.
 - **Language (CZ/EN).** Lives on `<html lang>` (`localStorage["leiLang"]`,
   default English). Server-rendered text carries both versions in
   `data-cs` / `data-en` (for attributes: `data-cs-placeholder`,
   `data-cs-title`, `data-cs-aria-label`); `applyLang()` in
-  `public/app.js` swaps them, and rich text uses `.only-cs` / `.only-en`
+  `src/main/static/app.js` swaps them, and rich text uses `.only-cs` / `.only-en`
   blocks. Strings the script writes itself live in its `STRINGS` table.
   Error messages in the server's JSON replies come as `error` (English)
   and `error_cs` (Czech): raise `core.models.InputError(english, czech)`
   for input the user must fix, and the script's `serverError()` shows
   the one for the current language.
   Every new user-visible string needs both languages.
+- **URLs.** Every link, asset and form target is built with `url_for`
+  (endpoints are `main.<name>`, assets `main.static`), since the app lives
+  under `URL_PREFIX`. The page script builds its requests with `appUrl()`
+  from the root the server renders into `<html data-app-root>`; a literal
+  path starting with "/" in `app.js` would escape the prefix
+  (`tests/test_smoke.py` checks).
 
-### Deployment (Vercel)
+### Deployment (CodeNOW)
 
-- The project is deployed from this repository with the Vercel CLI
-  (`vercel deploy` / `vercel deploy --prod`) or Git integration. Vercel
-  detects Flask from `app.py` and `requirements.txt`; no build step.
-- `vercel.json` sets `maxDuration: 300` for `app.py` and excludes
-  `tests/`, `docs/`, `.venv/` and `__pycache__` from the bundle;
-  `.vercelignore` keeps them out of the upload.
-- Environment variables: `DATABASE_URL` (injected by the Neon integration
-  added from the project's Storage tab), optional `OPENFIGI_API_KEY`.
-- Limits that shaped the design: request bodies max 4.5 MB (so uploads are
-  capped at 4 MB via `MAX_CONTENT_LENGTH`), 300 s per function invocation
-  (hence the chunked `/run` loop), no writable persistent disk (hence
-  Postgres), and Flask's `static_folder` is not served in production (hence
-  `public/`).
-- Dropped with the move off CodeNOW: `.codenow.yaml`, the `codenow/` JSON log
-  config (now `logging.basicConfig`), the B3 trace-header echo, waitress,
-  the PyCharm/mirrord run configs and the Sonar properties file.
+- CodeNOW builds the component from its **Bitbucket** repository; GitHub
+  deploys nothing. Commit to the branch the component's VCS settings name.
+  The push starts the Tekton pipeline from `.codenow.yaml`
+  (`python-pip-app-preview` / `python-pip-app-release`): `build` runs
+  `pip3 install -r requirements.txt` then `pylint --disable=C,R,W ./src`
+  (any `E`/`F` fails it and every later stage shows Skipped), then
+  `unit-test` -> `static-analysis` (Sonar) -> `container-build` ->
+  `push-helm`.
+- `.codenow.yaml` is the component's own copy (restored from the imported
+  Bitbucket history, commit 6d4d53c), not a reconstruction: build and
+  runtime image `python:3.12.6-slim-bullseye`, `runtime.port` 80, external
+  endpoint enabled. Advanced mode is off, so the Dockerfile and helm chart
+  are the platform's. Check `build.image` before using syntax newer than
+  3.12.
+- `/health` is the liveness probe: on the bare app, never under the
+  prefix, and dependency free (`tests/test_smoke.py` fails if it opens the
+  store or if importing the app does store I/O). A failing probe keeps the
+  previous revision live, which looks like "my deploy did nothing".
+- `URL_PREFIX` (default `/lei-lookup` in
+  `codenow/config/environment-variables`) must match the route the
+  platform publishes the component under; the bare `/` redirects there.
+  Other variables: `LEI_DB_PATH` (a mounted volume, as the image
+  filesystem is read-only; unset, the SQLite store lives in the temp dir
+  and is lost on restart), `DATABASE_URL` for Postgres instead, optional
+  `OPENFIGI_API_KEY`, `SECRET_KEY` (unused today).
+- A `/run` call can take up to about `RUN_DEADLINE_SECONDS` (120 s) when
+  GLEIF is slow. An ingress that cuts requests off sooner makes that call
+  end with the results page's "reload to resume" error; what the call had
+  finished is still stored, so a reload continues.
+- Upload cap: 4 MB (`MAX_UPLOAD_BYTES`, the app's `MAX_CONTENT_LENGTH`)
+  and 100 entities.
+- Restored with the move back to CodeNOW: `.codenow.yaml`, the JSON log
+  config, the B3 trace-header echo, waitress, the PyCharm/mirrord run
+  configs and the Sonar properties file. Dropped: `vercel.json`,
+  `.vercelignore`, `.python-version`, `requirements-dev.txt`, and
+  `public/` (now the blueprint's `static/`).
 
 ### Current state
 
@@ -380,12 +430,18 @@ stripped up to 20 characters, and doubled spaces inside one push it over.
 
 Feature-complete and deployable. Single and bulk search run against live
 GLEIF through the job endpoints, every search is persisted under a `job_id`
-(Postgres on Vercel, SQLite locally), and the results page, the manual
+(SQLite, or Postgres when `DATABASE_URL` is set), and the results page, the
+manual
 validation workflow and the CSV/Excel downloads are real. `tests/` covers the
 store and the route flows with GLEIF faked; run it before every change to the
 web layer. Matching behaviour (thresholds in `core/constants.py`) is
 audit-validated and unchanged from the CodeNOW version (apart from the
 legal-form whitespace above) - re-run the matcher audit before tuning it.
+
+The `codenow` branch was converted on 2026-09-24 and verified locally (the
+pylint gate, `scripts/check.ps1`, the suite with and without `URL_PREFIX`,
+waitress runs); it has not been built on CodeNOW yet, because deploying
+means pushing it to the component's Bitbucket repo.
 
 An optional LLM-assisted step (e.g. helping disambiguate near-misses) is a
 possible next addition; it would plug in after `core/lookup.lookup_entity`

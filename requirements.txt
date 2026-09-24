@@ -1,8 +1,21 @@
-# Runtime dependencies (installed by Vercel's Python build and locally).
+# CodeNOW installs this file during the build stage, then runs the pylint
+# gate (pylint --disable=C,R,W ./src) and the unit tests. Pin everything
+# with == : an unpinned range means a future release can change the build
+# without a commit.
+
+# Flask framework
 Flask==3.0.3
-# Pinned, not left to Flask's range: app.py raises its request class's
-# max_form_memory_size, a Werkzeug attribute.
+# Pinned, not left to Flask's range: src/app.py raises its request
+# class's max_form_memory_size, a Werkzeug attribute.
 Werkzeug==3.1.8
+
+# Production WSGI server
+waitress==3.0.0
+
+# Structured JSON logging (codenow/config/log-config.json)
+python-json-logger==2.0.7
+
+# LEI lookup
 requests==2.32.3
 # Imported by core/gleif.py, which reads reply bodies with
 # HTTPResponse.read1 (urllib3 2.3 and later).
@@ -12,6 +25,13 @@ pydantic==2.13.4
 rapidfuzz==3.14.5
 Unidecode==1.4.0
 
-# Postgres driver for the search store on Vercel (Neon). Unused locally
-# when DATABASE_URL is unset (the store then falls back to SQLite).
+# Postgres driver for the search store, used only when DATABASE_URL is
+# set; otherwise the store is SQLite (see core/storage.py).
 psycopg[binary]==3.3.6
+
+# Linter - the build gate
+pylint==3.2.3
+
+# Unit tests (and the coverage report sonar-project.properties reads)
+pytest==8.2.2
+coverage==7.5.4

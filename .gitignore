@@ -6,6 +6,8 @@ dist/
 wheels/
 *.egg-info
 .pytest_cache/
+.coverage
+coverage.xml
 
 # Virtual environments
 .venv
@@ -16,9 +18,10 @@ wheels/
 # Local SQLite store (only used when DATABASE_URL is unset)
 *.db
 
-# Vercel project link and pulled environment files
-.vercel
+# Local env files - never commit (and the Vercel project link the
+# vercel branch uses)
 .env*
+.vercel
 
 # Supports
 docs/

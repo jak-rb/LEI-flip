@@ -14,7 +14,8 @@ import pytest
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
 
-import app as app_module
+from app import app as flask_app
+from main import routes as app_module
 import core.upload as upload
 from core.models import InputError
 from core.upload import MAX_ENTITIES, parse_upload
@@ -101,8 +102,8 @@ def client(monkeypatch):
     def _no_lookup(entity, client_):
         raise AssertionError("creating a job must not look anything up")
     monkeypatch.setattr(app_module, "lookup_entity", _no_lookup)
-    app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+    flask_app.config["TESTING"] = True
+    return flask_app.test_client()
 
 
 # Rows are never dropped silently.
