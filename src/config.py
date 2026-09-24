@@ -31,7 +31,10 @@ class GlobalConstraints:
     # "/lei-lookup". Empty locally. Every generated URL goes through
     # url_for() (and, in the page script, the root the server renders
     # into <html data-app-root>), so the app works in both cases.
-    GC_URL_PREFIX = os.getenv("URL_PREFIX", "")
+    # Stray whitespace and a trailing slash are dropped ("/" means no
+    # prefix); a value without its leading slash still fails loudly at
+    # import rather than moving every route somewhere unexpected.
+    GC_URL_PREFIX = os.getenv("URL_PREFIX", "").strip().rstrip("/")
 
     # Sessions: set SECRET_KEY in the deployment environment once
     # anything depends on session state. The random default changes on

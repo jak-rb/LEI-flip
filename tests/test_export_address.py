@@ -570,8 +570,8 @@ def _no_network(*args, **kwargs):
 
 def test_run_with_a_whitespace_heavy_name_is_fast(monkeypatch):
     # The crazy-test repro: 20 plausible candidates and a single-form
-    # name of "A", 498 spaces, "B". One /run took 44-170 s, and on
-    # Vercel it would pass the 300 s limit with 40 candidates.
+    # name of "A", 498 spaces, "B". One /run took 44-170 s, and with
+    # 40 candidates it would pass 300 s.
     candidates = [
         GleifCandidate(
             lei=f"{index:020d}", legal_name=f"ACME HOLDING {index} a.s.",

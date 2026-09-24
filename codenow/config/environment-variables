@@ -18,3 +18,8 @@ SECRET_KEY=
 
 # Optional OpenFIGI API key: a higher rate limit for the ISIN fallback.
 # OPENFIGI_API_KEY=
+
+# waitress worker threads when started through src/app.py (default 16).
+# Each running search keeps one busy and /health needs a free one; a
+# platform-started waitress needs the same (waitress-serve --threads=16).
+# WAITRESS_THREADS=16

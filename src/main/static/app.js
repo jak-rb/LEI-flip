@@ -241,8 +241,9 @@ async function submitSearch(form, formData) {
             data = null;
         }
         // 413 is a size limit refusing the request: the app's own reply
-        // is JSON with the message to show, while Vercel's request body
-        // limit (4.5 MB) answers before the app with plain text.
+        // is JSON with the message to show, while a proxy's body limit
+        // in front of the app (the platform ingress) may answer first
+        // with plain text.
         if (response.status === 413) {
             showFormError(form, serverError(data) || t("tooLarge"));
             return;

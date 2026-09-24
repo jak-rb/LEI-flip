@@ -358,8 +358,8 @@ def test_decision_racing_run_cannot_shrink_the_results(monkeypatch):
     assert len(storage.get_search(job_id)["results"]) == 10
 
 
-# The stepper tests drive src/main/static/app.js in Node against a tiny fake DOM
-# holding three records to validate, with a /api/decision reply that
+# The stepper tests drive src/main/static/app.js in Node against a tiny
+# fake DOM holding three records to validate, with a /api/decision reply that
 # lands only when the harness releases it.
 _APP_JS = (
     Path(__file__).resolve().parent.parent

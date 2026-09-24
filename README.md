@@ -109,6 +109,10 @@ Defaults are documented in `codenow/config/environment-variables`.
   the ISIN fallback. Read from the environment, never hardcoded.
 - **`SECRET_KEY`**: only needed once something uses sessions (nothing
   does today).
+- **`WAITRESS_THREADS`** (default 16): worker threads when the app is
+  started through `src/app.py`. Each running search keeps one busy,
+  and `/health` needs a free one; if the platform starts waitress
+  itself, give it `--threads=16`.
 - **Upload cap**: 4 MB per file and 100 entities.
 
 Logs are JSON (`codenow/config/log-config.json`, python-json-logger),

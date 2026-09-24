@@ -492,10 +492,11 @@ def _call_bound():
     return app_module.RUN_DEADLINE_SECONDS + 1
 
 
-def test_one_run_call_ends_far_under_the_function_time_limit():
-    # A /run call must stay short: a proxy in front of the app (and
-    # CodeNOW's ingress) cuts off a request that runs too long.
-    assert app_module.RUN_TIME_BUDGET_SECONDS < _call_bound() <= 300 / 2
+def test_one_run_call_is_bounded():
+    # A /run call must stay bounded: a proxy in front of the app (and
+    # CodeNOW's ingress) cuts off a request that runs too long, and a
+    # running call holds one of waitress's threads.
+    assert app_module.RUN_TIME_BUDGET_SECONDS < _call_bound() <= 150
 
 
 def test_request_timeout_is_short():
@@ -530,7 +531,7 @@ def test_one_run_call_ends_in_time_when_first_attempts_time_out(
     client, session, clock,
 ):
     # Every request's first attempt times out and its retry answers:
-    # one such lookup used to run past Vercel's 300 s.
+    # one such lookup used to run for over 300 s.
     attempts = {"count": 0}
     starts = []
 

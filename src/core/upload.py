@@ -22,9 +22,10 @@ import logging
 import re
 import xml.parsers.expat
 import zipfile
-# From typing, not collections.abc: collections.abc is a frozen module
-# from Python 3.13 on, which pylint 3.2 cannot import (a false E0401
-# that fails the CodeNOW build gate).
+# From typing, not collections.abc: CPython 3.13.1+ ships no
+# collections/abc.py (the module is frozen), so pylint 3.2 reports a
+# false E0401 there - on a 3.13 dev box today, and in the CodeNOW build
+# once its image moves past 3.12.
 from typing import Iterable, Iterator
 
 from openpyxl.chartsheet import Chartsheet

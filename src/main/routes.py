@@ -75,10 +75,9 @@ RUN_TIME_BUDGET_SECONDS = 40
 #: The GLEIF client's deadline, in seconds from the start of a /run
 #: call: no request or retry starts after it and each request's
 #: timeout is cut to fit it, so a call ends by then even when GLEIF is
-#: slow. It lies well past the
-#: budget because one lookup makes up to about 20 requests, which a
-#: slow or flaky GLEIF can stretch past the budget while still
-#: answering every one.
+#: slow. It lies well past the budget because one lookup makes up to
+#: about 20 requests, which a slow or flaky GLEIF can stretch past the
+#: budget while still answering every one.
 RUN_DEADLINE_SECONDS = 120
 
 #: How many /run calls may fail on the same entity - GLEIF answering
@@ -110,7 +109,10 @@ GLEIF_TOO_SLOW_NOTE = (
 )
 
 
-@bp_main.route("/")
+# strict_slashes=False: the bare prefix ("/lei-lookup") serves the page
+# too. Werkzeug's slash redirect would send an absolute http:// URL,
+# which drops https behind a TLS-terminating ingress.
+@bp_main.route("/", strict_slashes=False)
 def index():
     return render_template("index.html")
 

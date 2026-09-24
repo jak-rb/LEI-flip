@@ -126,7 +126,7 @@ Vercel, where it is live (deploy it only from a `vercel` checkout).
 - **Flask** for the web layer and Jinja2 templates, as a blueprint component:
   the `create_app()` factory in `src/app.py` registers `bp_main`
   (`src/main/`) under `URL_PREFIX`; **waitress** serves the module-level
-  `app`
+  `app` (16 threads, `WAITRESS_THREADS`)
 - **python-json-logger** for the JSON logs `codenow/config/log-config.json`
   configures
 - stdlib **sqlite3** for the search store, or **psycopg[binary]** for
@@ -150,14 +150,19 @@ py -m venv .venv
 
 .venv\Scripts\python src\app.py       # waitress on http://127.0.0.1:8080/
 .venv\Scripts\python -m pytest -q      # test suite (SQLite store, faked GLEIF)
-.venv\Scripts\python -m pylint --disable=C,R,W src   # EXACTLY the build gate
+.venv\Scripts\python -m pylint --disable=C,R,W src   # the build's gate command
 
 # The plugin's readiness check (pylint gate, lint coverage, /health + /,
 # pytest) calls `py`; with the venv active `py` runs the venv's Python.
 .venv\Scripts\Activate.ps1; ./scripts/check.ps1   # must print READY TO COMMIT
 ```
 
-Run pylint from the project root, or it never loads `.pylintrc`. The app
+Run pylint from the project root, or it never loads `.pylintrc`. The local
+gate matches the build's exactly only on Python 3.12 (the build image's
+version); this machine has 3.13. Names that `src/app.py` imports from
+`main.routes` escape pylint's E0611 check (the scaffold's circular import
+`main` <-> `main.routes` hides them), so a typo there is caught by the
+tests, not the gate. The app
 resolves its files from its own location (`src/main/data/`, the log config
 under `codenow/config/`), so the working directory does not matter. With
 no `DATABASE_URL` the store is a local SQLite file, so a fresh clone runs
@@ -206,7 +211,7 @@ scripts/check.ps1    # the plugin's readiness check (copied verbatim)
 codenow/config/      # config.yaml, log-config.json, environment-variables
 nginx/app.conf       # from the platform scaffold; leave it alone
 .codenow.yaml        # the component's build/runtime images, pipelines, port 80
-.pylintrc            # puts src/ on pylint's path (insurance for the build gate)
+.pylintrc            # puts src/ on pylint's path (verbatim from the plugin)
 sonar-project.properties  # coverage report path for the static-analysis stage
 .run/                # PyCharm run config + mirrord config (from the component)
 requirements.txt     # pinned dependencies, runtime + pylint + pytest
@@ -405,6 +410,25 @@ a match.
   GLEIF is slow. An ingress that cuts requests off sooner makes that call
   end with the results page's "reload to resume" error; what the call had
   finished is still stored, so a reload continues.
+- waitress runs 16 worker threads (`WAITRESS_THREADS` in `src/app.py`): each
+  running search keeps one busy with back-to-back `/run` calls, and
+  `/health` queues for a free thread, so waitress's default of 4 let four
+  searches starve the probe (`tests/test_smoke.py` holds four and checks).
+  If the platform starts waitress itself rather than through
+  `src/app.py`'s `__main__`, it needs `--threads=16` too. Postgres
+  connects give up after 10 s for the same reason.
+- The bare prefix (`/lei-lookup`) serves the page itself
+  (`strict_slashes=False` on `main.index`): Werkzeug's slash redirect
+  would answer with an absolute `http://` URL behind a TLS ingress. The
+  root redirect (`/` -> `/lei-lookup/`) is relative. `URL_PREFIX` is
+  stripped of whitespace and a trailing slash; one without its leading
+  slash still fails loudly at import.
+- Unknown from here, check on the platform: whether its ingress passes
+  the prefix through (a stripping ingress would loop on the root
+  redirect), its read timeout and body limit (nginx defaults of 60 s
+  and 1 MB would cut slow `/run` calls and uploads before the app's
+  4 MB cap), and a writable temp dir (waitress spools request bodies
+  over 512 KB there, and the default SQLite store lives there).
 - Upload cap: 4 MB (`MAX_UPLOAD_BYTES`, the app's `MAX_CONTENT_LENGTH`)
   and 100 entities.
 - Restored with the move back to CodeNOW: `.codenow.yaml`, the JSON log

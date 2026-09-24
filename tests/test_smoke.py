@@ -12,14 +12,20 @@ import os
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
+import psycopg
 import pytest
+import requests
+import waitress
 from pythonjsonlogger.jsonlogger import JsonFormatter
 
 import app as app_entry
 from config import GlobalConstraints
 from core import storage
+from core.models import LookupResult
+from main import routes
 
 PREFIX = GlobalConstraints.GC_URL_PREFIX
 
@@ -30,6 +36,14 @@ TEST_PREFIX = "/lei-lookup"
 
 #: Every local URL a page links to or loads.
 _LOCAL_URL = re.compile(r'(?:href|src)="(/[^"]*)"')
+
+
+class _FakeGleifClient:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 def _client():
@@ -83,6 +97,86 @@ def test_import_does_no_store_io():
     assert done.stdout.strip() == "200"
 
 
+def test_prefix_tolerates_whitespace_and_a_trailing_slash():
+    """A stray space or slash in URL_PREFIX must not move every route."""
+    code = (
+        "import sys; sys.path.insert(0, 'src'); import config; "
+        "print(repr(config.GlobalConstraints.GC_URL_PREFIX))"
+    )
+    for value, expected in ((" /lei-lookup/ ", "/lei-lookup"), ("/", "")):
+        done = subprocess.run(
+            [sys.executable, "-c", code], cwd=ROOT,
+            env={**os.environ, "URL_PREFIX": value},
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        assert done.stdout.strip() == repr(expected), done.stderr
+
+
+def test_health_answers_while_four_searches_run(monkeypatch):
+    """Running searches must not starve the liveness probe.
+
+    Each running search keeps a waitress thread busy with /run calls;
+    with waitress's default of 4 threads, four of them left /health
+    queued until one call ended.
+    """
+    in_flight = threading.Semaphore(0)
+    release = threading.Event()
+
+    def slow_lookup(entity, client):
+        in_flight.release()
+        release.wait(30)
+        return LookupResult(notes="No LEI found in the GLEIF database."), []
+
+    monkeypatch.setattr(routes, "lookup_entity", slow_lookup)
+    monkeypatch.setattr(routes, "GleifClient", _FakeGleifClient)
+    server = waitress.create_server(
+        _client().application, host="127.0.0.1", port=0,
+        threads=app_entry.WAITRESS_THREADS,
+    )
+    threading.Thread(target=server.run, daemon=True).start()
+    root = f"http://127.0.0.1:{server.effective_port}"
+    runs = []
+    try:
+        for number in range(4):
+            job = requests.post(
+                f"{root}{PREFIX}/api/jobs",
+                data={"mode": "single", "entity_name": f"Slow {number} a.s."},
+                timeout=10,
+            ).json()["job_id"]
+            run = threading.Thread(
+                target=requests.post,
+                args=(f"{root}{PREFIX}/api/jobs/{job}/run",),
+                kwargs={"timeout": 60},
+            )
+            run.start()
+            runs.append(run)
+        for _ in runs:
+            assert in_flight.acquire(timeout=10)
+        response = requests.get(f"{root}/health", timeout=2)
+        assert response.json() == {"status": "UP"}
+    finally:
+        release.set()
+        for run in runs:
+            run.join(30)
+        server.close()
+        server.task_dispatcher.shutdown(timeout=5)
+
+
+def test_postgres_connect_is_bounded(monkeypatch):
+    """An unreachable database must not hold a thread for minutes."""
+    seen = {}
+
+    def fake_connect(*args, **kwargs):
+        seen.update(kwargs)
+        raise psycopg.OperationalError("unreachable")
+
+    monkeypatch.setattr(storage, "DATABASE_URL", "postgresql://db/none")
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    with pytest.raises(psycopg.OperationalError):
+        storage.get_search("0" * 32)
+    assert 0 < seen["connect_timeout"] <= 10
+
+
 def test_index_renders():
     response = _client().get((PREFIX or "") + "/")
     assert response.status_code == 200
@@ -115,7 +209,13 @@ def test_prefixed_app_answers_only_under_its_prefix(prefixed):
     assert prefixed.get("/health").status_code == 200
     root = prefixed.get("/")
     assert root.status_code == 302
-    assert root.headers["Location"].endswith(TEST_PREFIX + "/")
+    assert root.headers["Location"] == TEST_PREFIX + "/"
+    # The bare prefix serves the page itself: Werkzeug's slash redirect
+    # would answer with an absolute http:// URL.
+    bare = prefixed.get(TEST_PREFIX)
+    assert bare.status_code == 200
+    assert "Location" not in bare.headers
+    assert prefixed.get("/static/main/styles.css").status_code == 404
     for path in ("/results", "/admin"):
         assert prefixed.get(path).status_code == 404
         assert prefixed.get(TEST_PREFIX + path).status_code != 404

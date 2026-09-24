@@ -37,8 +37,8 @@ SEARCH_RETENTION_DAYS = 30
 
 #: A job id as ``main.routes.create_job`` mints it
 #: (``secrets.token_hex(16)``). Any other id is refused before it
-#: reaches the database: psycopg
-#: raises on a NUL in a text parameter, which made such ids a 500.
+#: reaches the database: psycopg raises on a NUL in a text parameter,
+#: which made such ids a 500.
 _JOB_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 
 #: How many times a decision reads the search and tries to write it
@@ -91,7 +91,11 @@ class _Connection:
             import psycopg
             from psycopg.rows import dict_row
 
-            self._raw = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+            # Bounded: an unreachable database would otherwise hold a
+            # waitress thread for psycopg's default 130 s per request.
+            self._raw = psycopg.connect(
+                DATABASE_URL, row_factory=dict_row, connect_timeout=10
+            )
             self._sqlite = False
         else:
             path = _sqlite_path()

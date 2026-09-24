@@ -29,7 +29,7 @@ from flask.testing import FlaskClient  # noqa: E402
 from app import app as flask_app  # noqa: E402
 from config import GlobalConstraints  # noqa: E402
 
-PREFIX = GlobalConstraints.GC_URL_PREFIX.rstrip("/")
+PREFIX = GlobalConstraints.GC_URL_PREFIX
 
 
 class _PrefixedClient(FlaskClient):

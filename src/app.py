@@ -33,6 +33,14 @@ _LOG_CONFIG_PATH = os.path.join(
     "..", "codenow", "config", "log-config.json",
 )
 
+# Worker threads for waitress. Every running search keeps one thread
+# busy with back-to-back /run calls (each up to RUN_DEADLINE_SECONDS),
+# and /health waits in the same queue for a free thread: waitress's
+# default of 4 lets four searches starve the liveness probe. If the
+# platform starts waitress itself, give it the same count
+# (waitress-serve --threads=16).
+WAITRESS_THREADS = int(os.environ.get("WAITRESS_THREADS", "16"))
+
 
 class _UploadCapRequest(Request):
     """Flask's request, with form fields allowed up to the upload cap.
@@ -70,7 +78,10 @@ def create_app(config_override=None):
     config_override:
         Optional dict merged into ``app.config`` (useful in tests).
     """
-    flask_app = Flask(__name__)
+    # No app-level static folder: every asset lives in the blueprint's
+    # static/ (main.static, under the prefix), and Flask's default
+    # /static rule would sit outside URL_PREFIX.
+    flask_app = Flask(__name__, static_folder=None)
 
     flask_app.config["SECRET_KEY"] = GlobalConstraints.GC_SECRET_KEY
     # Reject any request body larger than this. Flask raises HTTP 413
@@ -135,7 +146,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     try:
         from waitress import serve
-        serve(app, host="0.0.0.0", port=port)
+        serve(app, host="0.0.0.0", port=port, threads=WAITRESS_THREADS)
     except ImportError:
         app.run(host="0.0.0.0", port=port)
 
