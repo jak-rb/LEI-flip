@@ -110,10 +110,11 @@ or `.txt` file of entities.
 
 It is a lean rebuild based on the core of the original LEI lookup tool created
 by Jakub Schrimpel: the precision-first matcher and GLEIF/ISIN resolution are
-kept as-is. This branch (`codenow`) packages it as a CodeNOW Flask component
-on the blueprint scaffold of the `codenow-flask` plugin, so it can run on the
-bank's CodeNOW platform again, which it was first built for; the `vercel`
-branch (and `main`) hold the same app laid out for Vercel, where it is live.
+kept as-is. This tree (branches `codenow` and `main`) packages it as a
+CodeNOW Flask component on the blueprint scaffold of the `codenow-flask`
+plugin, so it can run on the bank's CodeNOW platform again, which it was
+first built for; the `vercel` branch holds the same app laid out for
+Vercel, where it is live (deploy it only from a `vercel` checkout).
 
 ### Tech stack
 

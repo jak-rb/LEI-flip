@@ -9,7 +9,7 @@ precision-first (no LLM): it asserts a LEI only when the name and legal
 address agree, or an ISIN resolves the identity; weaker hits are
 surfaced for manual review.
 
-This branch (`codenow`) packages the app as a **CodeNOW Flask
+This tree (branches `codenow` and `main`) packages the app as a **CodeNOW Flask
 component** on the blueprint scaffold of the `codenow-flask` plugin: a
 `create_app()` factory in `src/app.py`, the routes on `bp_main` in
 `src/main/routes.py`, `/health` for the platform probe, and waitress to
