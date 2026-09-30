@@ -135,6 +135,21 @@ def test_the_same_entity_still_clears_the_name_gate(searched, gleif_name):
     assert name_similarity(searched, gleif_name) >= NAME_MATCH_THRESHOLD
 
 
+@pytest.mark.parametrize("name, normalized", [
+    ("Allianz SE​", "allianz"),
+    ("Raiffeisenbank ﻿a.s.", "raiffeisenbank"),
+    ("Alfa s.r.o.‎", "alfa"),
+    ("Raiff­eisen AG", "raiffeisen"),
+    ("Českáspořitelna, a.s.", "ceska sporitelna"),
+])
+def test_invisible_characters_do_not_block_a_legal_form(name, normalized):
+    assert normalize_name(name) == normalized
+
+
+def test_a_name_with_a_trailing_zero_width_space_still_matches():
+    assert name_similarity("Allianz SE​", "Allianz SE") == 100
+
+
 def test_a_one_letter_fragment_is_not_matched_to_a_hyphenated_name():
     entity = InputEntity(name="V", town="Praha", country="CZ")
     client = _CannedGleif([_candidate("V-SPED s.r.o.", "S" * 20)])

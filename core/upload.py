@@ -65,19 +65,27 @@ _LISTED_ROWS = 5
 #: all labels. A cell with any other word, such as a company name, is
 #: data.
 _HEADER_WORDS = frozenset({
-    # Name
-    "name", "entity", "company", "legal", "full", "party", "issuer",
-    "firm", "firma", "firmy", "nazev", "subjekt", "subjektu",
-    "obchodni", "jmeno", "emitent", "emitenta", "spolecnost",
-    "spolecnosti", "counterparty", "protistrana", "protistrany",
-    "client", "klient", "klienta", "customer",
+    # Name, also in the plural a one-column list is headed by
+    # ("Company names", "Názvy firem", "Klienti")
+    "name", "names", "entity", "entities", "company", "companies",
+    "legal", "full", "party", "issuer", "issuers", "firm", "firms",
+    "firma", "firmy", "firem", "nazev", "nazvy", "subjekt", "subjektu",
+    "subjekty", "obchodni", "jmeno", "emitent", "emitenta", "emitenti",
+    "spolecnost", "spolecnosti", "counterparty", "counterparties",
+    "protistrana", "protistrany", "protistran", "client", "clients",
+    "klient", "klienta", "klienti", "klientu", "customer", "customers",
     # ISIN
     "isin", "code", "kod", "ident", "identifier",
     # Address
     "country", "zeme", "stat", "city", "town", "mesto", "obec",
-    "street", "ulice", "address", "adresa", "addr", "line", "zip",
+    "street", "ulice", "address", "adresa", "addr", "zip",
     "postal", "postcode", "psc",
 })
+
+#: Words a numbered label ("Address 2", "ADDR_LINE_1") must hold one
+#: of: address lines are what a header numbers. "line" is no label on
+#: its own, as a company may be named "LINE".
+_NUMBERED_LABEL_WORDS = frozenset({"address", "adresa", "addr", "line"})
 
 #: A note in parentheses, such as "(optional)" in "ISIN (optional)":
 #: it says how to fill a column, not what the column is.
@@ -212,6 +220,7 @@ def _read_xlsx(content: bytes) -> list[_Row]:
         sheet.reset_dimensions()
         if _holds_semicolon_lines(sheet):
             rows = _entity_rows(_split_semicolon_lines(sheet))
+            width = _LINE_COLUMNS
         else:
             decoded: dict[str, str] = {}
             rows = _entity_rows(
@@ -222,6 +231,8 @@ def _read_xlsx(content: bytes) -> list[_Row]:
                     sheet, len(_COLUMNS), _COLUMNS.index("zip_code")
                 )
             )
+            width = len(_COLUMNS)
+        _refuse_uncalculated(workbook, sheet, width)
         workbook.close()
     except _TooMuchData:
         logger.warning("Uploaded .xlsx needs more than the read budget")
@@ -245,6 +256,93 @@ def _read_xlsx(content: bytes) -> list[_Row]:
     return rows
 
 
+def _refuse_uncalculated(workbook, sheet, width: int) -> None:
+    """Refuse a sheet whose read columns hold formulas with no value.
+
+    An .xlsx is read as Excel shows it (openpyxl's data_only), from the
+    values Excel saved with each formula. A workbook written by a script,
+    or never calculated, has formulas with no saved value: they read as
+    empty, and their rows would vanish without a word.
+
+    Raises:
+        InputError: Naming the first such cells.
+    """
+    archive = workbook._archive
+    cells = [
+        cell
+        for cell in archive.uncalculated.get(sheet._worksheet_path, [])
+        if _column_number(cell) <= width
+    ]
+    if not cells:
+        return
+    listed = ", ".join(cells[:_LISTED_ROWS])
+    if len(cells) > _LISTED_ROWS:
+        listed += ", ..."
+    raise InputError(
+        f"Cells {listed} hold formulas with no calculated value, so they "
+        "read as empty. Open the file in Excel and save it again, or "
+        "paste the values instead of the formulas.",
+        f"Buňky {listed} obsahují vzorce bez spočítané hodnoty, takže "
+        "se čtou jako prázdné. Otevřete soubor v Excelu a znovu ho "
+        "uložte, nebo místo vzorců vložte hodnoty.",
+    )
+
+
+def _column_number(cell: str) -> int:
+    """The column number of a cell reference: "C7" is 3."""
+    number = 0
+    for char in cell:
+        if not char.isalpha():
+            break
+        number = number * 26 + ord(char.upper()) - ord("A") + 1
+    return number
+
+
+class _UncalculatedFormulas:
+    """Collect a worksheet part's formula cells that have no value.
+
+    Fed the part as the guard's expat parser reads it: a cell (<c
+    r="A2">) with a formula (<f>) but no value text is recorded by its
+    reference. An empty <v> is a value only in a cell typed "str": that
+    is how Excel saves a formula whose result is the empty string, while
+    openpyxl saves every formula with an empty <v> and no type.
+    """
+
+    def __init__(self) -> None:
+        self.cells: list[str] = []
+        self._cell = ""
+        self._formula = self._value = self._in_value = False
+
+    def start(self, name, attributes) -> None:
+        """Note a cell, its formula or its value opening."""
+        name = name.rpartition(":")[2]
+        if name == "c":
+            self._cell = attributes.get("r", "")
+            self._formula = False
+            self._value = attributes.get("t") == "str"
+        elif name == "f":
+            self._formula = True
+        elif name == "v":
+            self._in_value = True
+        elif name == "is":
+            self._value = True
+
+    def text(self, data) -> None:
+        """Note value text inside a <v>."""
+        if self._in_value and data.strip():
+            self._value = True
+
+    def end(self, name) -> None:
+        """Record a closing cell that had a formula and no value."""
+        name = name.rpartition(":")[2]
+        if name == "v":
+            self._in_value = False
+        elif name == "c":
+            if self._formula and not self._value:
+                self.cells.append(self._cell)
+            self._formula = False
+
+
 class _TooMuchData(Exception):
     """An .xlsx made openpyxl read more than the read budget allows.
 
@@ -260,7 +358,9 @@ class _GuardedArchive(zipfile.ZipFile):
     bytes handed out, and the XML nodes in them, counted by an expat
     parser of its own (openpyxl parses with expat too). A part with a
     DTD is refused: Office Open XML parts never have one, and its
-    entities could blow a small part up to gigabytes of text.
+    entities could blow a small part up to gigabytes of text. The same
+    parser collects each worksheet's formula cells that have no value
+    (``uncalculated``, by part name; see _refuse_uncalculated).
     """
 
     def __init__(self, file) -> None:
@@ -268,6 +368,7 @@ class _GuardedArchive(zipfile.ZipFile):
         self._bytes_left = _MAX_READ_BYTES
         self._nodes_left = _MAX_READ_NODES
         self._style_nodes_left = _MAX_STYLE_NODES
+        self.uncalculated: dict[str, list[str]] = {}
 
     def open(self, name, mode="r", pwd=None, **kwargs):
         """Open a part whose reads are charged to the budget."""
@@ -282,6 +383,18 @@ class _GuardedArchive(zipfile.ZipFile):
             else self._charge_nodes
         )
         counter.StartDoctypeDeclHandler = _refuse_doctype
+        if info.filename.startswith("xl/worksheets/"):
+            formulas = _UncalculatedFormulas()
+            self.uncalculated[info.filename] = formulas.cells
+            charge = counter.StartElementHandler
+
+            def start(name, attributes):
+                charge(name, attributes)
+                formulas.start(name, attributes)
+
+            counter.StartElementHandler = start
+            counter.EndElementHandler = formulas.end
+            counter.CharacterDataHandler = formulas.text
         read = part.read
 
         def charged_read(size=-1):
@@ -425,7 +538,8 @@ def _holds_semicolon_lines(sheet) -> bool:
     as the delimiter: each whole line lands in column A, split again
     into the next columns wherever a value holds a comma, even one in
     the name ("ČEZ, a. s."). So each row's line is rebuilt first (see
-    _line_fields). Every line must hold a semicolon, and more than
+    _line_fields). Every line must hold a semicolon, but a first line
+    of one cell may be a title (see _after_header), and more than
     half of them must follow the documented layout: nothing but a
     name before the first semicolon, and a second field that is empty,
     an ISIN or a label, or, in a line of three fields or more, a short
@@ -440,9 +554,14 @@ def _holds_semicolon_lines(sheet) -> bool:
     """
     checked = laid_out = 0
     decoded: dict[str, str] = {}
+    first = True
     for _, cells in _filled_rows(sheet, _LINE_COLUMNS):
+        title = first and sum(1 for cell in cells if cell.strip()) == 1
+        first = False
         # Joining the cells with commas adds no semicolon.
         if not any(";" in cell for cell in cells):
+            if title:
+                continue
             return False
         # Decoded, and empty when invisible, as the entity rows see it.
         fields = [
@@ -520,9 +639,27 @@ def _decode(content: bytes) -> str:
     text = content.decode("utf-8-sig", errors="replace")
     if _is_mostly_utf8(text):
         return text
+    # ISO 8859-2, as Unix tools and older bank systems export Czech,
+    # shares most letters with cp1250 but not Š, Ž, Ť, š, ž and ť: its
+    # text has none of the bytes 0x80-0x9F (control characters there,
+    # letters in cp1250) and some byte the two read differently.
+    if not _CP1250_ONLY.search(content) and _LATIN2_DIFFERS.search(content):
+        return content.decode("iso8859_2")
     # The five bytes cp1250 leaves undefined become U+FFFD: read as
     # latin-1 instead, every Czech letter in the file would be garbled.
     return content.decode("cp1250", errors="replace")
+
+
+#: Bytes that are letters in cp1250 but control characters in ISO
+#: 8859-2, and bytes the two encodings read as different letters.
+_CP1250_ONLY = re.compile(rb"[\x80-\x9f]")
+_LATIN2_DIFFERS = re.compile(
+    b"[" + b"".join(
+        re.escape(bytes([byte])) for byte in range(0xA0, 0x100)
+        if bytes([byte]).decode("cp1250", "replace")
+        != bytes([byte]).decode("iso8859_2")
+    ) + b"]"
+)
 
 
 def _is_mostly_utf8(text: str) -> bool:
@@ -630,7 +767,8 @@ def _after_header(rows: Iterator[_Row]) -> Iterator[_Row]:
 
     A first row of one filled cell may be a title ("Seznam subjektů",
     or "Firmy", itself a label) above the header: it is skipped with
-    the next row when that is a header of two labels or more.
+    the next row when that is a header of two labels or more, numbered
+    labels ("Adresa 1") counted.
     Otherwise such a row is data unless it is a header of its own, so
     a list of names keeps its first name whatever the second is.
     """
@@ -642,7 +780,9 @@ def _after_header(rows: Iterator[_Row]) -> Iterator[_Row]:
         second = next(rows, None)
         if (
             second is not None and _is_header(second[1])
-            and sum(_labels(second[1])) >= 2
+            and sum(_labels(second[1])) + sum(
+                1 for cell in second[1] if _is_numbered_label(cell)
+            ) >= 2
         ):
             yield from rows
             return
@@ -718,16 +858,22 @@ def _looks_like_data(cell: str) -> bool:
 def _is_numbered_label(cell: str) -> bool:
     """Whether a cell is a label with a column number, as "Address 1".
 
-    Its words are labels and short numbers ("ADDR_LINE_1", "Adresa
-    2"). It is not counted as a label either: "Firma 1" may name the
-    first entity of a test list.
+    Its words are labels, with an address-line word among them, and it
+    ends in a short number ("ADDR_LINE_1", "Adresa 2"). A street with
+    its house number is data: "Obchodní 12" and "25 Town Street" are
+    made of label words too. A numbered label is not counted as a label
+    either: "Firma 1" may name the first entity of a test list.
     """
     words = _words(_LABEL_NOTE.sub(" ", cell))
-    numbers = [word for word in words if word.isdigit()]
     return (
-        0 < len(numbers) < len(words)
-        and all(len(word) <= _LABEL_NUMBER_DIGITS for word in numbers)
-        and all(word in _HEADER_WORDS or word.isdigit() for word in words)
+        len(words) > 1 and words[-1].isdigit()
+        and len(words[-1]) <= _LABEL_NUMBER_DIGITS
+        and any(word in _NUMBERED_LABEL_WORDS for word in words)
+        and all(
+            word in _HEADER_WORDS or word in _NUMBERED_LABEL_WORDS
+            or word.isdigit() and len(word) <= _LABEL_NUMBER_DIGITS
+            for word in words
+        )
     )
 
 

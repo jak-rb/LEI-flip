@@ -101,7 +101,8 @@ def _is_probe(params):
 
 
 def _no_openfigi(*args, **kwargs):
-    raise requests.ConnectionError("OpenFIGI is offline in tests")
+    """OpenFIGI knowing no issuer for the ISIN."""
+    return _response(body=[{"warning": "No identifier found."}])
 
 
 def _openfigi_two_names(*args, **kwargs):
@@ -484,7 +485,7 @@ def test_lookup_whose_deadline_went_on_a_rate_limit_is_not_too_slow(
 
     def hanging_openfigi(*args, timeout=None, **kwargs):
         if not state["limiting"]:
-            raise requests.ConnectionError("OpenFIGI is offline")
+            return _no_openfigi()
         clock.now += timeout
         raise requests.Timeout("OpenFIGI read timed out")
     monkeypatch.setattr(openfigi, "_post", hanging_openfigi)
@@ -610,4 +611,75 @@ def test_stored_record_that_no_longer_validates_is_failed_not_a_500(
     # The results page renders the job.
     page = client.get(f"/results?job={job_id}")
     assert page.status_code == 200
+
+
+
+# ---- OpenFIGI failing is worth a retry, not a final "no match" ----
+
+@pytest.mark.parametrize("reply, retry_after", [
+    (lambda: _response(429, headers={"Retry-After": "7"}), 7),
+    (lambda: _response(429), openfigi.DEFAULT_RETRY_AFTER),
+    (lambda: _response(503), None),
+])
+def test_openfigi_failures_raise_unavailable(monkeypatch, reply, retry_after):
+    monkeypatch.setattr(openfigi, "_post", lambda *a, **k: reply())
+    with pytest.raises(openfigi.OpenFigiUnavailable) as caught:
+        openfigi.resolve_isin_to_names(ISIN)
+    assert caught.value.retry_after == retry_after
+
+
+def test_openfigi_unreachable_raises_unavailable(monkeypatch):
+    def offline(*args, **kwargs):
+        raise requests.ConnectionError("OpenFIGI is offline")
+    monkeypatch.setattr(openfigi, "_post", offline)
+    with pytest.raises(openfigi.OpenFigiUnavailable):
+        openfigi.resolve_isin_to_names(ISIN)
+
+
+@pytest.mark.parametrize("reply", [
+    lambda: _response(400),
+    lambda: _response(body=[{"warning": "No identifier found."}]),
+])
+def test_openfigi_knowing_nothing_is_an_empty_list(monkeypatch, reply):
+    monkeypatch.setattr(openfigi, "_post", lambda *a, **k: reply())
+    assert openfigi.resolve_isin_to_names(ISIN) == []
+
+
+def test_an_openfigi_rate_limit_pauses_the_job(client, monkeypatch):
+    state = {"limiting": True}
+
+    def post(*args, **kwargs):
+        if state["limiting"]:
+            return _response(429, headers={"Retry-After": "12"})
+        return _no_openfigi()
+    monkeypatch.setattr(openfigi, "_post", post)
+    job_id = _create_job(client, [f",{ISIN}"])
+
+    for _ in range(app_module.RUN_MAX_ATTEMPTS + 2):
+        body = _run(client, job_id).get_json()
+        assert (body["throttled"], body["service"]) == (True, "OpenFIGI")
+        assert body["retry_after"] == 12
+        assert (body["searched"], body["done"]) == (0, False)
+    # A rate limit is not the entity's fault.
+    assert _attempts(job_id) == [0]
+
+    state["limiting"] = False
+    body = _run(client, job_id).get_json()
+    assert (body["searched"], body["done"]) == (1, True)
+    assert "OpenFIGI did not lead" in _notes(job_id)[0]
+
+
+def test_an_entity_openfigi_keeps_failing_on_is_given_up(client, monkeypatch):
+    monkeypatch.setattr(openfigi, "_post", lambda *a, **k: _response(503))
+    job_id = _create_job(client, [f",{ISIN}"])
+
+    for attempt in range(1, app_module.RUN_MAX_ATTEMPTS):
+        body = _run(client, job_id).get_json()
+        assert body["throttled"] is True
+        assert body["retry_after"] == app_module.OPENFIGI_PAUSE_SECONDS
+        assert body["service"] == "OpenFIGI"
+        assert _attempts(job_id) == [attempt]
+    body = _run(client, job_id).get_json()
+    assert (body["searched"], body["done"]) == (1, True)
+    assert _notes(job_id) == [app_module.OPENFIGI_ERRORS_NOTE]
 

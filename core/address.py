@@ -3,6 +3,7 @@
 
 import json
 import re
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -202,6 +203,21 @@ def _shorten_whitespace_run(match: re.Match) -> str:
     return run[:20] + kinds + run[-1]
 
 
+def _drop_invisible(text: str) -> str:
+    """Drop format characters; turn U+0085 into a space."""
+    # A zero-width space, a direction mark or a BOM pasted with a name
+    # would stop a legal form next to it from being stripped, and
+    # unidecode would drop it only after that. U+0085 is whitespace to
+    # the patterns but dropped by unidecode, merging its two words.
+    if text.isascii():
+        return text
+    return "".join(
+        " " if char == "\x85" else char
+        for char in text
+        if unicodedata.category(char) != "Cf"
+    ).strip()
+
+
 # The matcher normalizes the searched name again for every name of
 # every candidate, so each lookup repeats the same few inputs.
 @lru_cache(maxsize=1024)
@@ -220,7 +236,7 @@ def normalize_name(name: str) -> str:
     if not name:
         return ""
 
-    result = name.strip().lower()
+    result = _drop_invisible(name.strip().lower())
     result = _RE_LONG_WHITESPACE.sub(_shorten_whitespace_run, result)
 
     _load_legal_forms()

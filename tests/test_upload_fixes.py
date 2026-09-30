@@ -12,6 +12,7 @@ tests/test_app.py does, so nothing reaches GLEIF.
 
 import csv
 import io
+import zipfile
 
 import pytest
 from openpyxl import Workbook
@@ -536,4 +537,121 @@ def test_mostly_cp1250_with_a_utf8_n_caron_keeps_the_czech_letters():
         + _lines(["Plzeň a.s."]).encode()
     )
     assert _names(content) == CZECH_NAMES + ["PlzeĹ� a.s."]
+
+
+
+# The 2026-09-30 test run: titles, numbered labels, plural headers,
+# Latin-2 text.
+
+def test_a_title_line_above_semicolon_lines_keeps_the_line_mode():
+    lines = [
+        "Seznam subjektů",
+        "Název;ISIN;Země;Město;Ulice;PSČ",
+        "Alfa a.s.;CZ0005112300;CZ;Praha;Ulice 1;110 00",
+        "Beta s.r.o.;;CZ;Brno;Náměstí 2;602 00",
+    ]
+    assert _fields(_opened_with_commas(lines)) == [
+        ("Alfa a.s.", "CZ0005112300", "CZ", "Praha", "Ulice 1", "110 00"),
+        ("Beta s.r.o.", None, "CZ", "Brno", "Náměstí 2", "602 00"),
+    ]
+
+
+def test_a_title_above_a_header_of_numbered_labels_is_skipped():
+    rows = [
+        ["Seznam subjektů"], ["Název", "", "Adresa 1", "Adresa 2", "Adresa 3"],
+    ] + [[f"Firma {index} a.s.", "", "Ulice 1"] for index in range(100)]
+    assert len(parse_upload("in.csv", _csv(rows))) == MAX_ENTITIES
+    assert len(parse_upload("in.xlsx", _xlsx(rows))) == MAX_ENTITIES
+
+
+@pytest.mark.parametrize("first_row", [
+    ["Party City", "", "", "Leeds", "25 Town Street", ""],
+    ["Town & Country", "", "", "Leeds", "12 Town Street", ""],
+    ["Obchodní společnost", "", "", "Kolín", "Obchodní 12", ""],
+    ["LINE", "", "", "Tokyo", "", ""],
+])
+def test_a_first_row_with_a_street_and_house_number_is_data(first_row):
+    rows = [first_row, ["Firma 2"]]
+    assert _names(_csv(rows)) == [first_row[0], "Firma 2"]
+    assert _names(_xlsx(rows), "in.xlsx") == [first_row[0], "Firma 2"]
+
+
+@pytest.mark.parametrize("header", [
+    "Names", "Company names", "Companies", "Entities", "Legal names",
+    "Issuers", "Counterparties", "Clients", "Customers", "Názvy",
+    "Názvy firem", "Klienti", "Emitenti", "Subjekty",
+])
+def test_a_one_column_list_under_a_plural_header_skips_it(header):
+    rows = [[header]] + [[f"Firma {index} a.s."] for index in range(100)]
+    names = _names(_csv(rows))
+    assert len(names) == MAX_ENTITIES and header not in names
+    assert len(parse_upload("in.xlsx", _xlsx(rows))) == MAX_ENTITIES
+
+
+def test_latin2_text_keeps_its_czech_letters():
+    names = CZECH_NAMES + ["Žabka s.r.o.", "Šťastný a syn, s.r.o."]
+    assert _names(_lines(names).encode("iso8859_2")) == names
+
+
+def test_cp1250_text_is_still_read_as_cp1250():
+    names = CZECH_NAMES + ["Žabka s.r.o.", "Šťastný a syn, s.r.o."]
+    assert _names(_lines(names).encode("cp1250")) == names
+
+
+
+def _with_formulas(rows):
+    """An .xlsx whose "=..." cells are formulas saved with no value."""
+    workbook = Workbook()
+    for row in rows:
+        workbook.active.append(row)
+    content = io.BytesIO()
+    workbook.save(content)  # openpyxl saves no calculated values
+    return content.getvalue()
+
+
+def test_formulas_with_no_calculated_value_are_refused():
+    content = _with_formulas([
+        ["Alfa a.s.", "", "CZ"],
+        ['="Beta"&" a.s."', "", "CZ"],
+        ["Gama a.s.", "", '=IF(1,"CZ","SK")'],
+    ])
+    english, czech = _refusal(content, "in.xlsx")
+    assert english.startswith(
+        "Cells A2, C3 hold formulas with no calculated value"
+    )
+    assert czech.startswith("Buňky A2, C3 obsahují vzorce")
+
+
+def test_a_formula_whose_result_is_empty_text_is_no_problem():
+    # Excel saves a formula that gives "" as a "str" cell, empty <v>.
+    content = _with_formulas([["Alfa a.s.", '=IF(1,"","x")', "CZ"]])
+    sheet = "xl/worksheets/sheet1.xml"
+    with zipfile.ZipFile(io.BytesIO(content)) as source:
+        parts = {name: source.read(name) for name in source.namelist()}
+    parts[sheet] = parts[sheet].replace(b'<c r="B1"', b'<c r="B1" t="str"')
+    saved = io.BytesIO()
+    with zipfile.ZipFile(saved, "w") as target:
+        for name, data in parts.items():
+            target.writestr(name, data)
+    assert _names(saved.getvalue(), "in.xlsx") == ["Alfa a.s."]
+
+
+def test_a_formula_outside_the_read_columns_is_no_problem():
+    content = _with_formulas([["Alfa a.s.", "", "CZ", "", "", "", "=1+1"]])
+    assert _names(content, "in.xlsx") == ["Alfa a.s."]
+
+
+def test_a_formula_with_its_saved_value_is_read():
+    content = _with_formulas([['="Beta"&" a.s."', "", "CZ"]])
+    sheet = "xl/worksheets/sheet1.xml"
+    with zipfile.ZipFile(io.BytesIO(content)) as source:
+        parts = {name: source.read(name) for name in source.namelist()}
+    parts[sheet] = parts[sheet].replace(
+        b"<v /></c>", b"<v>Beta a.s.</v></c>"
+    ).replace(b'<c r="A1"', b'<c r="A1" t="str"')
+    saved = io.BytesIO()
+    with zipfile.ZipFile(saved, "w") as target:
+        for name, data in parts.items():
+            target.writestr(name, data)
+    assert _names(saved.getvalue(), "in.xlsx") == ["Beta a.s."]
 

@@ -82,7 +82,8 @@ def _mentions(params, word):
 
 
 def _no_openfigi(*args, **kwargs):
-    raise requests.ConnectionError("OpenFIGI is offline in tests")
+    """OpenFIGI knowing no issuer for the ISIN."""
+    return _response(body=[{"warning": "No identifier found."}])
 
 
 def _openfigi_two_names(*args, **kwargs):
@@ -691,8 +692,10 @@ def test_openfigi_request_stops_at_the_deadline(monkeypatch, clock):
     with pytest.raises(DeadlineExceeded):
         openfigi.resolve_isin_to_names(ISIN, deadline=deadline)
     assert timeouts == [3]
-    # With no deadline a timeout stays the usual soft failure.
-    assert openfigi.resolve_isin_to_names(ISIN) == []
+    # With no deadline a timeout is OpenFIGI not answering: worth
+    # trying again later, not "OpenFIGI knows nothing".
+    with pytest.raises(openfigi.OpenFigiUnavailable):
+        openfigi.resolve_isin_to_names(ISIN)
     assert timeouts[-1] == OPENFIGI_TIMEOUT
 
 

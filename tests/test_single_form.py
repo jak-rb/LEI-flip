@@ -422,7 +422,8 @@ def _response(status=200):
 
 
 def _no_openfigi(*args, **kwargs):
-    raise requests.ConnectionError("OpenFIGI is offline in tests")
+    """OpenFIGI knowing no issuer for the ISIN."""
+    return _response()
 
 
 @pytest.fixture

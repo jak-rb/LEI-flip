@@ -723,7 +723,8 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
 
 /* ---- Validation stepper -------------------------------------------------- */
 
-.detail-searched { margin: 0 0 1rem; color: var(--muted); }
+/* A long unbroken name must wrap, not widen the page on a phone. */
+.detail-searched { margin: 0 0 1rem; color: var(--muted); overflow-wrap: anywhere; }
 .detail-searched strong { color: var(--fg); }
 
 .validation {
@@ -905,6 +906,10 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
   .brand-divider, .brand-text { display: none; }
   .field-row { flex-direction: column; gap: 0; }
   .results-actions-split { flex-direction: column; align-items: stretch; }
+  /* On a phone the two pinned columns would cover the whole candidate
+     table: let them scroll with the rest, so the names show. */
+  .candidates-table .col-confirm,
+  .candidates-table .col-overall { position: static; box-shadow: none; }
 }
 
 @media (max-width: 560px) {

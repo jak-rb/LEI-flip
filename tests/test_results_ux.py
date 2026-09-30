@@ -174,6 +174,7 @@ def _real_notes(monkeypatch):
         (app_module.GLEIF_REFUSED_NOTE, []),
         (app_module.GLEIF_ERRORS_NOTE, []),
         (app_module.GLEIF_TOO_SLOW_NOTE, []),
+        (app_module.OPENFIGI_ERRORS_NOTE, []),
     ]
     return notes
 
@@ -189,7 +190,7 @@ def test_every_lookup_note_has_a_czech_version(monkeypatch):
     notes = _real_notes(monkeypatch)
     # Every distinct note text the code has (the LAPSED/RETIRED
     # variants add their status sentence to a note of their own).
-    assert len({note for note, _ in notes}) == 19
+    assert len({note for note, _ in notes}) == 20
 
     untranslated = []
     for note, params in notes:
@@ -784,4 +785,16 @@ def test_card_state_texts_match_the_template():
         ).groups()
         assert f'{key}: "{english}"' in script
         assert f'{key}: "{czech}"' in script
+
+
+
+# ---- live pages are never reused from the HTTP cache ----
+
+def test_results_and_downloads_are_not_stored_by_the_browser():
+    client = app_module.app.test_client()
+    job_id = "0" * 32
+    for path in ("/results", "/download/csv", "/download/excel"):
+        response = client.get(f"{path}?job={job_id}")
+        assert response.headers["Cache-Control"] == "no-store", path
+    assert "Cache-Control" not in client.get("/").headers
 

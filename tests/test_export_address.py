@@ -103,7 +103,9 @@ def _exported_rows(client, job_id):
     csv_response = client.get(f"/download/csv?job={job_id}")
     assert csv_response.status_code == 200
     csv_text = csv_response.get_data(as_text=True)
-    csv_rows = list(csv.reader(io.StringIO(csv_text)))
+    # A byte-order mark first, so Excel reads the file as UTF-8.
+    assert csv_text.startswith("﻿")
+    csv_rows = list(csv.reader(io.StringIO(csv_text[1:])))
 
     for rows in (excel_rows, csv_rows):
         assert rows[0] == export.COLUMNS
@@ -193,11 +195,15 @@ def test_exports_neutralise_a_formula_behind_a_control_character(client):
 
 
 def _normalize_name_before_fix(name):
-    """normalize_name as of 5b0b3ae, the reference output."""
+    """normalize_name as of 5b0b3ae, the reference output.
+
+    Plus the invisible-character step added on 2026-09-30, which
+    changes the output on purpose (see test_precision_fixes.py).
+    """
     if not name:
         return ""
 
-    result = name.strip().lower()
+    result = address._drop_invisible(name.strip().lower())
 
     address._load_legal_forms()
     for pattern in address._LEGAL_FORM_PATTERNS:

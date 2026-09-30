@@ -39,6 +39,7 @@ from core.gleif import (
 from core.lookup import lookup_entity
 from core.models import InputEntity, InputError, LookupResult, is_blank
 from core.notes import czech_note
+from core.openfigi import OpenFigiUnavailable
 from core.upload import parse_upload
 
 logging.basicConfig(
@@ -97,6 +98,21 @@ def request_too_large(error):
     }, 413
 
 
+#: Pages that change as a job runs and decisions are saved. Back must
+#: fetch them again: from the HTTP cache the results page showed saved
+#: decisions as undecided and old counts (no-cache is not enough there,
+#: browsers still reuse the copy on Back).
+_NO_STORE_PATHS = ("/results", "/download/csv", "/download/excel")
+
+
+@app.after_request
+def no_store_live_pages(response):
+    """Keep browsers from reusing a stale results page or export."""
+    if request.path in _NO_STORE_PATHS:
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.errorhandler(storage.StoreUnavailable)
 def store_unavailable(error):
     """Answer 503 when no database is configured on Vercel.
@@ -145,6 +161,10 @@ RUN_DEADLINE_SECONDS = 120
 #: that one bad entity cannot stall the job for ever.
 RUN_MAX_ATTEMPTS = 3
 
+#: Seconds the page waits before the next /run call after OpenFIGI
+#: failed without a rate limit (a server error, no answer).
+OPENFIGI_PAUSE_SECONDS = 10
+
 GLEIF_DOWN_MESSAGE = "GLEIF service is unavailable. Please try again later."
 GLEIF_DOWN_MESSAGE_CS = "Služba GLEIF je nedostupná. Zkuste to prosím později."
 
@@ -165,6 +185,10 @@ GLEIF_ERRORS_NOTE = (
 GLEIF_TOO_SLOW_NOTE = (
     "Lookup failed: the GLEIF search took too long - LEI not assigned. "
     "Please search this entity again later."
+)
+OPENFIGI_ERRORS_NOTE = (
+    "Lookup failed: OpenFIGI kept failing - LEI not assigned. Please "
+    "search this entity again later."
 )
 
 
@@ -434,6 +458,8 @@ def _lookup_row(
         GleifApiError: If GLEIF is unavailable or rate-limiting; a
             cut-off of a lookup that waiting out rate limits left
             short of time is a GleifRateLimited too.
+        OpenFigiUnavailable: If OpenFIGI rate-limits, or fails while
+            the entity has attempts left.
     """
     client.rate_limit_waits = []
     started = time.monotonic()
@@ -471,6 +497,15 @@ def _lookup_row(
         return _failed_row(entity, GLEIF_TOO_SLOW_NOTE)
     except GleifApiError:
         raise
+    except OpenFigiUnavailable as exc:
+        # A rate limit is not the entity's fault and costs no attempt;
+        # a server error or no answer does, so the job still ends.
+        if exc.retry_after is not None or not _gave_up(job_id, index):
+            raise
+        logger.warning(
+            "Giving up on entity %d of job %s: %s", index, job_id, exc
+        )
+        return _failed_row(entity, OPENFIGI_ERRORS_NOTE)
     except Exception:
         # A bug or a reply of a shape nobody expected: retrying the
         # entity would only fail the same way again.
@@ -490,8 +525,11 @@ def run_job(job_id: str):
     completed and answers 503 with an ``error`` message (and its Czech
     ``error_cs``), so a later call resumes from there. When GLEIF
     rate-limits for longer than the call has left, the reply is the
-    progress plus ``throttled`` and ``retry_after`` (the seconds to
-    wait before the next call). Once RUN_TIME_BUDGET_SECONDS have
+    progress plus ``throttled``, ``retry_after`` (the seconds to wait
+    before the next call) and ``service`` ("GLEIF"); an OpenFIGI rate
+    limit or failure pauses the job the same way ("OpenFIGI"), and an
+    entity OpenFIGI keeps failing on is stored as failed after
+    RUN_MAX_ATTEMPTS calls. Once RUN_TIME_BUDGET_SECONDS have
     passed no further lookup starts, and the one under way must end by
     RUN_DEADLINE_SECONDS. A lookup cut off by that deadline is not
     stored and the next call starts it again, while one that failed
@@ -514,6 +552,7 @@ def run_job(job_id: str):
     rows = []
     gleif_down = False
     retry_after = None
+    paused_by = "GLEIF"
     started = time.monotonic()
     with GleifClient() as client:
         client.deadline = started + RUN_DEADLINE_SECONDS
@@ -545,6 +584,11 @@ def run_job(job_id: str):
                 logger.exception("GLEIF lookup failed: %s", exc)
                 gleif_down = True
                 break
+            except OpenFigiUnavailable as exc:
+                logger.warning("OpenFIGI lookup paused: %s", exc)
+                retry_after = exc.retry_after or OPENFIGI_PAUSE_SECONDS
+                paused_by = "OpenFIGI"
+                break
             if time.monotonic() - started > RUN_TIME_BUDGET_SECONDS:
                 break
 
@@ -568,6 +612,7 @@ def run_job(job_id: str):
             **progress,
             "throttled": True,
             "retry_after": math.ceil(retry_after),
+            "service": paused_by,
         }
     return progress
 
@@ -578,8 +623,10 @@ def download_csv():
     search = storage.get_search(request.args.get("job", ""))
     if search is None:
         abort(404)
+    # The byte-order mark makes Excel read the file as UTF-8: without
+    # it, Czech Excel takes it for cp1250 and "ČEZ" opens as "ÄŚEZ".
     return Response(
-        export.build_csv(search),
+        "﻿" + export.build_csv(search),
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=results.csv"},
     )

@@ -215,10 +215,14 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    PARTY_FULL_NAME/ISIN_IDENT, "ISIN (optional)", ...;
    `core/upload._is_header`): never when its ISIN is valid or it has at
    least as many data-looking cells (a digit, a country name or code) as
-   labels, so "Party City,,US,..." stays data; a numbered label
-   ("Address 1", "ADDR_LINE_2", `core/upload._is_numbered_label`) counts
-   as neither label nor data, so "Firma 1" still starts a list; a
-   one-cell title row above a header is dropped with it. A row with a value over its
+   labels, so "Party City,,US,..." stays data; a numbered label (an
+   address-line word and a short number last: "Address 1", "ADDR_LINE_2",
+   `core/upload._is_numbered_label`) counts as neither label nor data,
+   while a street with its house number ("Obchodní 12") is data and "Firma
+   1" still starts a list; plural labels ("Company names", "Klienti")
+   head a one-column list; a one-cell title row above a header (numbered
+   labels counted) is dropped with it, also above semicolon lines. A row
+   with a value over its
    `InputEntity` length limit refuses the whole file, naming the row (as
    numbered in the file), the field and the limit - rows are never dropped
    or truncated silently. Parsing stops at the 101st entity row ("more
@@ -234,6 +238,10 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    locally, a shared-strings one about 5 s);
    `core/upload._load_workbook` relies on openpyxl 3.1.5 internals
    (`ExcelReader.archive`), so re-check it when upgrading openpyxl.
+   The same guard notes formulas saved with no value (a script-written
+   or never-calculated workbook; `core/upload._UncalculatedFormulas`,
+   using `ReadOnlyWorksheet._worksheet_path`): one in the columns read
+   refuses the file, naming the cells, as it would read as empty.
    Cells are read as Excel shows them: `_xHHHH_` escapes are decoded, and
    a numeric postal code with a zeros-only number format keeps its leading
    zeros (1001 as "000 00" -> "010 01"). The semicolon-lines mode is
@@ -241,7 +249,9 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    commas ("ČEZ, a. s.") work, while a plain sheet whose names hold ';'
    keeps its columns. Text files: UTF-16 by BOM, then UTF-8; a file that
    is mostly valid UTF-8 keeps UTF-8 with U+FFFD for the bad bytes, else
-   cp1250 (undefined bytes become U+FFFD). The extension is the part from
+   ISO 8859-2 when no byte is 0x80-0x9F and some byte reads differently
+   from cp1250 (its Š, Ž, Ť, š, ž, ť), else cp1250 (undefined bytes become
+   U+FFFD). The extension is the part from
    the last dot, so a file named just ".csv" is read.
 2. The browser navigates to `/results?job=<id>`. For an unfinished job the
    page renders the summary card in its running state and `public/app.js`
@@ -269,9 +279,15 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    `RUN_MAX_ATTEMPTS` (3) calls; an unexpected error, or a stored record
    that no longer passes the input rules, is failed at once - so a job
    always finishes. When GLEIF rate-limits (429) for longer than the call
-   has left, the reply is 200 with the progress plus `throttled` and
-   `retry_after`, and the page counts the wait down (2-30 s) and continues
-   by itself; a cut-off counts as throttled when the lookup's own
+   has left, the reply is 200 with the progress plus `throttled`,
+   `retry_after` and `service` ("GLEIF"), and the page counts the wait
+   down (2-30 s) and continues by itself. OpenFIGI failing pauses the same
+   way (`service` "OpenFIGI", `core.openfigi.OpenFigiUnavailable`): a rate
+   limit after its Retry-After and costing no attempt, a server error or
+   no answer after `OPENFIGI_PAUSE_SECONDS` (10) and counting one, until
+   the entity is stored as failed after `RUN_MAX_ATTEMPTS` - an empty
+   result would have been stored as a final "no match". A cut-off counts
+   as throttled when the lookup's own
    rate-limit waits (`GleifClient.rate_limit_waits`, reset per lookup)
    left it less than `RUN_DEADLINE_SECONDS - RUN_TIME_BUDGET_SECONDS` of
    its own time. requests' timeout bounds each socket read, not a whole
@@ -335,7 +351,9 @@ card with the four counts (Searched `x / total`, Matched, Need validation,
 Unmatched), the orange validation stepper (top 3 candidates per near-miss,
 confirm one or "None of these", saved via `POST /api/decision` ->
 `storage.record_decision`), the matched and no-match tables, and the CSV /
-Excel downloads built by `core/export.py` (a confirmed pick exports as
+Excel downloads built by `core/export.py` (the CSV starts with a UTF-8
+byte-order mark, so Excel does not read it as cp1250; a confirmed pick
+exports as
 `MANUAL_MATCH`, a rejection as `MANUAL_NO_MATCH`; characters XML forbids are
 dropped - those that read as whitespace (VT, FF, FS-US) become a space - and
 formula-like cells neutralised; notes stay English). A decision is accepted only
@@ -373,9 +391,18 @@ a match.
   blocks. Strings the script writes itself live in its `STRINGS` table.
   Error messages in the server's JSON replies come as `error` (English)
   and `error_cs` (Czech): raise `core.models.InputError(english, czech)`
-  for input the user must fix, and the script's `serverError()` shows
-  the one for the current language.
+  for input the user must fix. The script keeps every message it writes
+  in both languages on its element (`both(key)`, `serverMessage(data)`,
+  `showBoth(el, message)`), so a CZ/EN switch translates it too.
   Every new user-visible string needs both languages.
+- **Caching and history.** `/results` and the downloads are sent with
+  `Cache-Control: no-store` (`app.no_store_live_pages`): from the HTTP
+  cache, Back showed saved decisions as undecided. Search stays disabled
+  once the results page is on its way (re-enabled on a back-forward
+  cache restore), and an explicit theme choice stops the page following
+  the OS scheme. `tests/test_frontend.py` drives these in Node.
+- **Phones.** Below 700 px the stepper's Overall/Confirm columns are not
+  pinned, as the two covered the whole table at 375 px.
 
 ### Deployment (Vercel)
 
@@ -429,6 +456,10 @@ case), the one lost true match recovered, the four wrong-country ISIN rows
 now matched through ISIN plus name with `COUNTRY_MISMATCH`, and 105 of its
 109 labelled name pairs (was 104). "Compartment A" vs "B" still collapses:
 "compartment" is stripped as a legal form before its letter is seen.
+`normalize_name` also drops invisible format characters before the legal
+forms (a trailing zero-width space kept "Allianz SE" from matching) and
+turns U+0085 into a space (`core/address._drop_invisible`); the replay
+is unchanged by it.
 
 Feature-complete and deployable. Single and bulk search run against live
 GLEIF through the job endpoints, every search is persisted under a `job_id`

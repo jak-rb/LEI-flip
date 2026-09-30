@@ -121,6 +121,12 @@ _NOTE_TEMPLATES = [
         "LEI nebylo přiřazeno. Vyhledejte prosím tento subjekt později "
         "znovu.",
     ),
+    (
+        "Lookup failed: OpenFIGI kept failing - LEI not assigned. Please "
+        "search this entity again later.",
+        "Vyhledání selhalo: OpenFIGI opakovaně selhávalo - LEI nebylo "
+        "přiřazeno. Vyhledejte prosím tento subjekt později znovu.",
+    ),
 ]
 
 # The sentence some notes end with when the LEI is not maintained: the
