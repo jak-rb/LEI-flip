@@ -124,25 +124,25 @@ def _real_notes(monkeypatch):
         (
             isin_module.resolve_isin_only(
                 InputEntity(isin="XX12"), _CannedGleif(),
-            ).notes,
+            )[0].notes,
             [],
         ),
         (
             isin_module.resolve_isin_only(
                 isin_only, _CannedGleif(by_isin=[_candidate(), bare]),
-            ).notes,
+            )[0].notes,
             [ISIN],
         ),
         (
             isin_module.resolve_isin_only(
                 isin_only, _CannedGleif(by_isin=[retired]),
-            ).notes,
+            )[0].notes,
             [ISIN, "RETIRED"],
         ),
         (
             isin_module.resolve_isin_only(
                 isin_only, _CannedGleif(by_isin=[_candidate()]),
-            ).notes,
+            )[0].notes,
             [ISIN],
         ),
     ]

@@ -617,6 +617,8 @@ def _partition(results: list) -> dict:
                 "street": match.get("gleif_legal_street"),
                 "overall": match.get("confidence"),
                 "lei": algo_lei,
+                "status": match.get("lei_status"),
+                "warnings": match.get("warnings") or [],
             })
         elif decision.get("status") == "confirmed":
             candidate = _candidate_by_lei(closest, decision.get("lei"))
@@ -629,6 +631,8 @@ def _partition(results: list) -> dict:
                     "street": candidate.get("street"),
                     "overall": candidate.get("overall"),
                     "lei": candidate.get("lei"),
+                    "status": candidate.get("status"),
+                    "warnings": [],
                 })
 
         if decision.get("status") == "none" or (not algo_lei and not closest):

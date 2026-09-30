@@ -10,6 +10,7 @@ from typing import Optional
 from unidecode import unidecode
 
 _COUNTRY_MAP: Optional[dict[str, str]] = None
+_ALPHA3: Optional[dict[str, str]] = None
 _LEGAL_FORMS: Optional[list[str]] = None
 _LEGAL_FORM_PATTERNS: Optional[list[re.Pattern]] = None
 
@@ -48,16 +49,35 @@ _RE_ZIP_STATE = re.compile(
 )
 _RE_ZIP_PREFIX = re.compile(r'^[A-Z]{2,3}-')
 
-# Share class suffix patterns (e.g. "- A", "- BI EUR", "Class A",
-# "(Acc)"), stripped before name comparison.
+# Share class suffix patterns (e.g. "- A", "- BI EUR", "- I Acc",
+# "Class A", "(Acc)"), stripped before name comparison.
+#
+# Both are deliberately narrow: what follows the hyphen or the word
+# "class" must look like a share class - a 1-2 letter code with an
+# optional digit (A, BI, R2), a currency, or a distribution/hedging
+# keyword - and the hyphen must have a space on both sides. The looser
+# patterns ported first stripped any trailing hyphenated word of up to
+# four letters and any word after "class"/"share", which collapsed real
+# names to a bare stem ("V-SPED s.r.o." -> "v", "SIM-ROLL" -> "sim",
+# "Trust 2023-A" -> "trust 2023", "World Class Air" -> "world") and let
+# a sibling or a fragment be asserted at full confidence. The original
+# tool narrowed the hyphen form the same way on 2026-09-18 (its RAIF /
+# SIF designators moved to data/legal_forms.txt). An unusual class code
+# now stays in the name and only counts as a distinguishing token:
+# NO_MATCH with details, never a wrong LEI.
+_SHARE_CLASS_TOKEN = (
+    r'(?:[A-Z]{1,2}\d?|SUB|VOT|ACC|DIS|DIST|INC|CAP|HEDGED|HDG|UNHEDGED'
+    r'|INST|RETAIL|USD|EUR|GBP|CHF|CZK|JPY|SEK|NOK|DKK|PLN|HUF|AUD|CAD'
+    r'|SGD|HKD)'
+)
 _RE_SHARE_CLASS_SUFFIX = re.compile(
-    r'\s*-\s*[A-Z]{1,4}'
-    r'(?:\s+(?:SUB|VOT|ACC|DIS|INC|CAP|USD|EUR|GBP|CHF|CZK|JPY|SEK|NOK'
-    r'|DKK|PLN|HUF|AUD|CAD|SGD|HKD))*\s*$',
+    r'\s+-\s+' + _SHARE_CLASS_TOKEN
+    + r'(?:\s+' + _SHARE_CLASS_TOKEN + r')*\s*$',
     re.IGNORECASE,
 )
 _RE_SHARE_CLASS_WORD = re.compile(
-    r'\s+(?:class|share|trida|klasse|classe)\s+[A-Z0-9]{1,5}\b.*$',
+    r'\s+(?:(?:share\s+)?class|share|trida|klasse|classe)\s+'
+    r'(?:' + _SHARE_CLASS_TOKEN + r'|\d{1,3})\b.*$',
     re.IGNORECASE,
 )
 _RE_TRAILING_PARENS = re.compile(r'\s*\([^)]{1,20}\)\s*$')
@@ -71,6 +91,15 @@ def _load_country_map() -> dict[str, str]:
         with open(path, encoding="utf-8") as f:
             _COUNTRY_MAP = json.load(f)
     return _COUNTRY_MAP
+
+
+def _load_alpha3() -> dict[str, str]:
+    """Lazily load and cache the ISO alpha-3 -> alpha-2 table."""
+    global _ALPHA3
+    if _ALPHA3 is None:
+        with open(DATA_DIR / "country_alpha3.json", encoding="utf-8") as f:
+            _ALPHA3 = json.load(f)
+    return _ALPHA3
 
 
 def _load_legal_forms() -> list[str]:
@@ -108,9 +137,10 @@ def _load_legal_forms() -> list[str]:
 def country_to_iso(country_name: Optional[str]) -> Optional[str]:
     """Convert a country name to an ISO 3166-1 alpha-2 code.
 
-    Accepts English or Czech names (diacritics optional) and common
-    abbreviations such as "UK" and "ČR", and passes through values that
-    are already two-letter ISO codes.
+    Accepts English or Czech names (diacritics optional), common native
+    and official names ("Deutschland", "Slovak Republic"), abbreviations
+    such as "UK" and "ČR", and ISO alpha-3 codes ("DEU"), and passes
+    through values that are already two-letter ISO codes.
 
     Args:
         country_name: The country name or code to convert (may be None).
@@ -129,11 +159,15 @@ def country_to_iso(country_name: Optional[str]) -> Optional[str]:
     if key in mapping:
         return mapping[key]
 
+    # An ISO alpha-3 code, as bank data exports often carry ("CZE").
+    cleaned = country_name.strip().upper()
+    if cleaned in _load_alpha3():
+        return _ALPHA3[cleaned]
+
     # Already an ISO code? An unknown two-letter value is passed on too:
     # as a country no candidate has, it keeps the country check strict
     # instead of dropping it. Checked before the diacritics retry, so
     # "CR" stays Costa Rica rather than "ČR" without its háček.
-    cleaned = country_name.strip().upper()
     two_letters = len(cleaned) == 2 and cleaned.isalpha()
     if two_letters and cleaned.isascii():
         return cleaned

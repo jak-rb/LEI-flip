@@ -12,7 +12,11 @@ import logging
 from typing import Optional
 
 from .address import country_to_iso
-from .constants import AMBIGUITY_CONFIDENCE_DELTA, LAPSED_STATUSES
+from .constants import (
+    ADDRESS_CONTRADICTION_CAP,
+    AMBIGUITY_CONFIDENCE_DELTA,
+    LAPSED_STATUSES,
+)
 from .gleif import GleifClient
 from .isin import normalize_isin, resolve_isin_only, resolve_via_isin
 from .matcher import (
@@ -85,7 +89,10 @@ def _apply_common_warnings(
         if WarningCode.CHECK_FAILED.value not in warnings:
             warnings.append(WarningCode.CHECK_FAILED.value)
 
-    if not entity.country:
+    # Also for a country given but not recognised ("DEU" before the
+    # alpha-3 table, a misspelling): it filtered nothing and was checked
+    # against nothing, so it is as unverified as an empty one.
+    if country_to_iso(entity.country) is None:
         if WarningCode.COUNTRY_UNVERIFIED.value not in warnings:
             warnings.append(WarningCode.COUNTRY_UNVERIFIED.value)
 
@@ -144,10 +151,23 @@ def lookup_entity(
     # LEI authoritatively from the ISIN; when GLEIF's mapping has no
     # record of it, fall back to a softer OpenFIGI review (both below).
     if not entity.name:
-        result = resolve_isin_only(entity, client)
-        if result is not None:
-            return result, []
-        return _isin_only_openfigi_review(entity, client)
+        resolved = resolve_isin_only(entity, client)
+        if resolved is None:
+            return _isin_only_openfigi_review(entity, client)
+        result, to_review = resolved
+        # A multi-LEI mapping: the records the ISIN maps to go to the
+        # validation stepper. No name was given, so only the address
+        # fields (if any) score.
+        closest = []
+        for candidate in to_review[:CLOSEST_CANDIDATE_LIMIT]:
+            addr_score, details = address_match_score(
+                entity, candidate, "legal"
+            )
+            closest.append(
+                _build_candidate_summary(candidate, 0, addr_score, details)
+            )
+        closest.sort(key=lambda summary: summary.overall, reverse=True)
+        return result, closest
 
     iso_country = country_to_iso(entity.country)
     isin_country = _isin_country(entity.isin)
@@ -181,8 +201,7 @@ def _classify_candidates(
     entity: InputEntity, candidates: list[GleifCandidate], client: GleifClient
 ) -> LookupResult:
     """Score the candidates and return the precision-first verdict."""
-    best_full_match: Optional[LookupResult] = None
-    full_match_leis: list[tuple[str, float]] = []
+    full_matches: list[LookupResult] = []
     best_hq_candidate: Optional[GleifCandidate] = None
     best_hq_score = 0.0
     best_hq_name_score = 0.0
@@ -208,8 +227,9 @@ def _classify_candidates(
             # Active street+zip contradiction: name+city matched, but
             # the input street AND zip are both present, the candidate
             # carries both, and both disagree (the shared registered-
-            # agent case). Flag it and shave confidence so a clean
-            # match wins. Missing street/zip data is NOT penalized.
+            # agent case). Flag it and cap confidence below 80 so a
+            # clean match wins and a ">= 80" filter never includes it.
+            # Missing street/zip data is NOT penalized.
             la = candidate.legal_address
             street_s = legal_details.get("street_score", 0)
             contradiction = (
@@ -220,7 +240,7 @@ def _classify_candidates(
                 and legal_details.get("zip_score", 0) == 0
             )
             if contradiction:
-                confidence = min(confidence, 80.0)
+                confidence = min(confidence, ADDRESS_CONTRADICTION_CAP)
 
             result = LookupResult(
                 lei=candidate.lei,
@@ -251,12 +271,7 @@ def _classify_candidates(
             contradiction_code = WarningCode.ADDRESS_CONTRADICTION.value
             if contradiction and contradiction_code not in result.warnings:
                 result.warnings = result.warnings + [contradiction_code]
-            full_match_leis.append((candidate.lei, confidence))
-            if (
-                best_full_match is None
-                or confidence > best_full_match.confidence
-            ):
-                best_full_match = result
+            full_matches.append(result)
 
         # Track the best HQ-only address match even when legal matched.
         hq_score, hq_details = address_match_score(entity, candidate, "hq")
@@ -275,8 +290,8 @@ def _classify_candidates(
             best_name_candidate = candidate
             best_name_score_val = ns
 
-    if best_full_match:
-        return _finalize_full_match(best_full_match, full_match_leis)
+    if full_matches:
+        return _finalize_full_match(full_matches)
 
     # An ISIN can resolve a LEI directly or corroborate a near-miss.
     if entity.isin:
@@ -308,17 +323,24 @@ def _classify_candidates(
     return _no_match("No LEI found in the GLEIF database.")
 
 
-def _finalize_full_match(
-    result: LookupResult, full_match_leis: list[tuple[str, float]]
-) -> LookupResult:
-    """Flag an ambiguous full match, log, and return it."""
+def _finalize_full_match(full_matches: list[LookupResult]) -> LookupResult:
+    """Pick the full match to assert, flag ambiguity, log, return it."""
+    top = max(match.confidence for match in full_matches)
+    near = [
+        match for match in full_matches
+        if match.confidence >= top - AMBIGUITY_CONFIDENCE_DELTA
+    ]
+    # Within that band a maintained LEI beats a dead twin (a DUPLICATE,
+    # or an old RETIRED LEI next to a re-registration), which scores the
+    # same on name and address; then the highest confidence, the first
+    # one GLEIF listed on a tie.
+    result = max(near, key=lambda match: (
+        (match.lei_status or "").upper() not in LAPSED_STATUSES,
+        match.confidence,
+    ))
     # If two or more DISTINCT LEIs cleared the gate within a small
     # band of the winner, we may be asserting the wrong sibling.
-    near_leis = {
-        lei
-        for lei, conf in full_match_leis
-        if conf >= result.confidence - AMBIGUITY_CONFIDENCE_DELTA
-    }
+    near_leis = {match.lei for match in near}
     ambiguous_code = WarningCode.AMBIGUOUS_MATCH.value
     if len(near_leis) >= 2 and ambiguous_code not in result.warnings:
         result.warnings = result.warnings + [ambiguous_code]

@@ -13,6 +13,7 @@ import logging
 import re
 from typing import Optional
 
+from .address import country_to_iso
 from .constants import (
     ISIN_NAME_THRESHOLD,
     LAPSED_STATUSES,
@@ -96,6 +97,38 @@ def _lapsed_note(status: Optional[str]) -> str:
     return ""
 
 
+def _countries(candidate: GleifCandidate) -> set[str]:
+    """The countries of a candidate's legal and HQ addresses."""
+    return {
+        address.country
+        for address in (candidate.legal_address, candidate.hq_address)
+        if address and address.country
+    }
+
+
+def _other_country(entity: InputEntity, candidate: GleifCandidate) -> bool:
+    """Whether the entity's recognised country is not the candidate's."""
+    country = country_to_iso(entity.country)
+    countries = _countries(candidate)
+    return bool(country and countries) and country not in countries
+
+
+def _country_warnings(
+    entity: InputEntity, candidate: GleifCandidate
+) -> list[str]:
+    """COUNTRY_UNVERIFIED or COUNTRY_MISMATCH for an ISIN-based match.
+
+    No warning only when the entity's country is recognised and is the
+    country of the candidate's legal or HQ address: a filled-in country
+    that nothing was checked against must not read as verified.
+    """
+    if _other_country(entity, candidate):
+        return [WarningCode.COUNTRY_MISMATCH.value]
+    if not (country_to_iso(entity.country) and _countries(candidate)):
+        return [WarningCode.COUNTRY_UNVERIFIED.value]
+    return []
+
+
 def _fmt(address: Optional[GleifAddress]) -> Optional[str]:
     """Format a GLEIF address, or None when absent."""
     return address.format() if address else None
@@ -151,7 +184,10 @@ def resolve_via_isin(
 
     isin_candidates = client.search_by_isin(isin)
 
-    direct = _direct_isin_match(entity, isin, isin_candidates)
+    direct = _direct_isin_match(
+        entity, isin, isin_candidates,
+        rivals=[c for c in (hq_candidate, name_candidate) if c is not None],
+    )
     if direct:
         return direct
 
@@ -173,9 +209,24 @@ def resolve_via_isin(
 
 
 def _direct_isin_match(
-    entity: InputEntity, isin: str, isin_candidates: list[GleifCandidate]
+    entity: InputEntity,
+    isin: str,
+    isin_candidates: list[GleifCandidate],
+    rivals: Optional[list[GleifCandidate]] = None,
 ) -> Optional[LookupResult]:
-    """Accept a GLEIF ISIN hit whose name matches the entity."""
+    """Accept the best GLEIF ISIN hit whose name matches the entity.
+
+    A hit is not asserted when it lies in another country than the one
+    the entity gives, or when the name search found another LEI whose
+    name matches better (``rivals``): an ISIN of a related entity (a
+    parent, a fund of the named manager) must not override the named
+    one. Such a row stays for review with its name candidates.
+    """
+    rival_scores = [
+        (rival.lei, best_name_score(entity, rival))
+        for rival in rivals or []
+    ]
+    best: Optional[tuple[float, GleifCandidate]] = None
     for candidate in isin_candidates:
         ns = best_name_score(entity, candidate)
         # Skip dead entities unless the name is a strong match.
@@ -183,31 +234,42 @@ def _direct_isin_match(
             continue
         if ns < ISIN_NAME_THRESHOLD:
             continue
-        warnings = [
-            WarningCode.ISIN_ONLY.value,
-            WarningCode.UNVERIFIED_ADDRESS.value,
-        ]
-        warnings += _status_warnings(candidate.status)
-        if not entity.country:
-            warnings.append(WarningCode.COUNTRY_UNVERIFIED.value)
-        logger.info("ISIN_GLEIF_MATCH: %s -> %s", isin, candidate.lei)
-        return LookupResult(
-            lei=candidate.lei,
-            lei_status=candidate.status,
-            match_type=MatchType.ISIN_GLEIF_MATCH,
-            confidence=min(75 + ns * 0.15, 95),
-            gleif_legal_name=candidate.legal_name,
-            gleif_legal_address=_fmt(candidate.legal_address),
-            gleif_hq_address=_fmt(candidate.hq_address),
-            notes=(
-                f"ISIN {isin} found in GLEIF; LEI assigned despite the "
-                f"address not matching."
-            ),
-            match_details={"name_score": round(ns, 1)},
-            warnings=warnings,
-            **_legal_parts(candidate),
-        )
-    return None
+        if _other_country(entity, candidate):
+            continue
+        if any(
+            lei != candidate.lei and score > ns
+            for lei, score in rival_scores
+        ):
+            continue
+        if best is None or ns > best[0]:
+            best = (ns, candidate)
+    if best is None:
+        return None
+
+    ns, candidate = best
+    warnings = [
+        WarningCode.ISIN_ONLY.value,
+        WarningCode.UNVERIFIED_ADDRESS.value,
+    ]
+    warnings += _status_warnings(candidate.status)
+    warnings += _country_warnings(entity, candidate)
+    logger.info("ISIN_GLEIF_MATCH: %s -> %s", isin, candidate.lei)
+    return LookupResult(
+        lei=candidate.lei,
+        lei_status=candidate.status,
+        match_type=MatchType.ISIN_GLEIF_MATCH,
+        confidence=min(75 + ns * 0.15, 95),
+        gleif_legal_name=candidate.legal_name,
+        gleif_legal_address=_fmt(candidate.legal_address),
+        gleif_hq_address=_fmt(candidate.hq_address),
+        notes=(
+            f"ISIN {isin} found in GLEIF; LEI assigned despite the "
+            f"address not matching."
+        ),
+        match_details={"name_score": round(ns, 1)},
+        warnings=warnings,
+        **_legal_parts(candidate),
+    )
 
 
 def _isin_confirms_hq(
@@ -221,8 +283,7 @@ def _isin_confirms_hq(
         return None
     warnings = [WarningCode.HQ_ONLY_MATCH.value]
     warnings += _status_warnings(hq_candidate.status)
-    if not entity.country:
-        warnings.append(WarningCode.COUNTRY_UNVERIFIED.value)
+    warnings += _country_warnings(entity, hq_candidate)
     lapsed = _lapsed_note(hq_candidate.status)
     return LookupResult(
         lei=hq_candidate.lei,
@@ -261,8 +322,7 @@ def _isin_confirms_name(
         WarningCode.UNVERIFIED_ADDRESS.value,
     ]
     warnings += _status_warnings(name_candidate.status)
-    if not entity.country:
-        warnings.append(WarningCode.COUNTRY_UNVERIFIED.value)
+    warnings += _country_warnings(entity, name_candidate)
     return LookupResult(
         lei=name_candidate.lei,
         lei_status=name_candidate.status,
@@ -291,6 +351,10 @@ def _openfigi_fallback(
     paths miss. Precision guard: a candidate is accepted only when BOTH
     the input name and the OpenFIGI-resolved name fuzzy-match it (each
     >= OPENFIGI_NAME_THRESHOLD), so OpenFIGI can never invent a match.
+    The re-search is by name only, so a candidate in another country
+    than the entity's is skipped, and only a unique best candidate (by
+    both scores) is asserted: same-named banks and groups exist in
+    several countries, and GLEIF's result order must not pick one.
 
     Args:
         entity: The entity being looked up.
@@ -300,6 +364,8 @@ def _openfigi_fallback(
     Returns:
         A positive LookupResult, or None if nothing corroborated.
     """
+    # (input score + OpenFIGI score, input score, candidate, name)
+    passing: list[tuple[float, float, GleifCandidate, str]] = []
     for figi_name in resolve_isin_to_names(isin, deadline=client.deadline):
         logger.info(
             "OpenFIGI resolved ISIN %s -> %r; re-searching GLEIF",
@@ -312,70 +378,84 @@ def _openfigi_fallback(
             if (
                 input_ns < OPENFIGI_NAME_THRESHOLD
                 or figi_ns < OPENFIGI_NAME_THRESHOLD
+                or _other_country(entity, candidate)
             ):
                 continue
+            passing.append(
+                (input_ns + figi_ns, input_ns, candidate, figi_name)
+            )
+    if not passing:
+        return None
 
-            confidence = min(65 + (input_ns + figi_ns) * 0.05, 85)
-            if _is_dead(candidate.status):
-                confidence = min(confidence, 70)
-            warnings = [
-                WarningCode.ISIN_ONLY.value,
-                WarningCode.UNVERIFIED_ADDRESS.value,
-            ]
-            warnings += _status_warnings(candidate.status)
-            if not entity.country:
-                warnings.append(WarningCode.COUNTRY_UNVERIFIED.value)
-            logger.info(
-                "ISIN_OPENFIGI_MATCH: %s -> %s", isin, candidate.lei
-            )
-            return LookupResult(
-                lei=candidate.lei,
-                lei_status=candidate.status,
-                match_type=MatchType.ISIN_GLEIF_MATCH,
-                confidence=confidence,
-                gleif_legal_name=candidate.legal_name,
-                gleif_legal_address=_fmt(candidate.legal_address),
-                gleif_hq_address=_fmt(candidate.hq_address),
-                notes=(
-                    f"ISIN {isin} resolved via OpenFIGI ({figi_name}); "
-                    f"LEI found in GLEIF.{_lapsed_note(candidate.status)}"
-                ),
-                match_details={"name_score": round(input_ns, 1)},
-                warnings=warnings,
-                **_legal_parts(candidate),
-            )
-    return None
+    best = max(passing, key=lambda entry: entry[0])
+    if any(
+        entry[0] == best[0] and entry[2].lei != best[2].lei
+        for entry in passing
+    ):
+        logger.info("OpenFIGI fallback for %s is ambiguous", isin)
+        return None
+
+    total, input_ns, candidate, figi_name = best
+    confidence = min(65 + total * 0.05, 85)
+    if _is_dead(candidate.status):
+        confidence = min(confidence, 70)
+    warnings = [
+        WarningCode.ISIN_ONLY.value,
+        WarningCode.UNVERIFIED_ADDRESS.value,
+    ]
+    warnings += _status_warnings(candidate.status)
+    warnings += _country_warnings(entity, candidate)
+    logger.info("ISIN_OPENFIGI_MATCH: %s -> %s", isin, candidate.lei)
+    return LookupResult(
+        lei=candidate.lei,
+        lei_status=candidate.status,
+        match_type=MatchType.ISIN_GLEIF_MATCH,
+        confidence=confidence,
+        gleif_legal_name=candidate.legal_name,
+        gleif_legal_address=_fmt(candidate.legal_address),
+        gleif_hq_address=_fmt(candidate.hq_address),
+        notes=(
+            f"ISIN {isin} resolved via OpenFIGI ({figi_name}); "
+            f"LEI found in GLEIF.{_lapsed_note(candidate.status)}"
+        ),
+        match_details={"name_score": round(input_ns, 1)},
+        warnings=warnings,
+        **_legal_parts(candidate),
+    )
 
 
 def resolve_isin_only(
     entity: InputEntity, client: GleifClient
-) -> Optional[LookupResult]:
+) -> Optional[tuple[LookupResult, list[GleifCandidate]]]:
     """Resolve a name-less input by its ISIN, authoritatively.
 
     Used when the user supplied an ISIN but no name. Resolution is
     authoritative: GLEIF's own ISIN -> LEI mapping (``lookup_by_isin``).
     Exactly one hit is auto-asserted as a confident match; an invalid
-    ISIN or an ambiguous multi-LEI mapping returns a NO_MATCH.
+    ISIN or an ambiguous multi-LEI mapping returns a NO_MATCH, the
+    latter with the records the ISIN maps to, for review.
 
     Args:
         entity: The name-less entity being looked up (carries an ISIN).
         client: An open GLEIF client.
 
     Returns:
-        The confident match or a NO_MATCH LookupResult; or None when the
-        ISIN is valid but absent from GLEIF's mapping - the signal for
-        the caller to try the softer OpenFIGI review (see lookup.py).
+        A ``(result, to_review)`` tuple: the confident match or a
+        NO_MATCH, and the GLEIF records to offer for review (only for a
+        multi-LEI mapping, else empty). None when the ISIN is valid but
+        absent from GLEIF's mapping - the signal for the caller to try
+        the softer OpenFIGI review (see lookup.py).
     """
     isin = normalize_isin(entity.isin)
     if not is_valid_isin(isin):
         return LookupResult(
             match_type=MatchType.NO_MATCH,
             notes="No name was given and the ISIN is not valid.",
-        )
+        ), []
 
     candidates = client.lookup_by_isin(isin)
     if len(candidates) == 1:
-        return _isin_only_match(entity, isin, candidates[0])
+        return _isin_only_match(entity, isin, candidates[0]), []
 
     if not candidates:
         # Valid ISIN, but GLEIF's authoritative mapping has no record of
@@ -388,7 +468,7 @@ def resolve_isin_only(
             f"ISIN {isin} maps to multiple LEIs in GLEIF; manual review "
             f"is needed."
         ),
-    )
+    ), candidates
 
 
 def _isin_only_match(
@@ -401,8 +481,7 @@ def _isin_only_match(
         WarningCode.UNVERIFIED_ADDRESS.value,
     ]
     warnings += _status_warnings(candidate.status)
-    if not entity.country:
-        warnings.append(WarningCode.COUNTRY_UNVERIFIED.value)
+    warnings += _country_warnings(entity, candidate)
     logger.info("ISIN_ONLY_MATCH: %s -> %s", isin, candidate.lei)
     return LookupResult(
         lei=candidate.lei,

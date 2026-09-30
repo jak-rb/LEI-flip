@@ -68,10 +68,19 @@ OPENFIGI_NAME_THRESHOLD = 65
 #: AMBIGUOUS_MATCH.
 AMBIGUITY_CONFIDENCE_DELTA = 2.0
 
+#: Confidence ceiling for a FULL_MATCH whose input street AND zip both
+#: contradict the candidate's (flagged ADDRESS_CONTRADICTION): just
+#: below 80, so a "confidence >= 80" filter never picks one up. Set with
+#: the original tool's precision fixes of 2026-09-18.
+ADDRESS_CONTRADICTION_CAP = 79.0
+
 #: GLEIF registration statuses meaning the LEI is no longer maintained.
-LAPSED_STATUSES = frozenset(
-    {"LAPSED", "RETIRED", "ANNULLED", "MERGED", "TRANSFERRED"}
-)
+#: DUPLICATE marks the second LEI of an entity that has another one;
+#: CANCELLED a registration abandoned before it was issued.
+LAPSED_STATUSES = frozenset({
+    "LAPSED", "RETIRED", "ANNULLED", "MERGED", "TRANSFERRED",
+    "DUPLICATE", "CANCELLED",
+})
 
 
 # The precision guarantee depends on ambiguous name pairs staying below

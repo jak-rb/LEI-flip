@@ -38,21 +38,45 @@ _NAME_STOPWORDS = frozenset({
     "die", "das", "la", "le", "el", "du", "des", "et", "y", "a",
 })
 
+# Single-letter roman numerals that serve as entity serials ("Series
+# I", "Fund V"). "Investec Fund Series" locked onto "Ninety One Funds
+# Series I" at 98.6 when the "I" was dropped as noise while "II"/"IV"
+# were kept (fixed the same way in the original tool on 2026-09-18).
+_ROMAN_SINGLE = frozenset({"i", "v", "x"})
+
+# Words after which a single letter is a serial ("Compartment B",
+# "Series C"), like a letter after a number ("Trust 2023-A").
+_SERIAL_WORDS = frozenset({
+    "fund", "funds", "fond", "fonds", "series", "serie", "compartment",
+    "class", "tranche", "trust", "portfolio", "funding", "programme",
+    "program",
+})
+
 
 def _significant_tokens(normalized: str) -> list[str]:
     """Entity-distinguishing tokens of an already-normalized name."""
-    # Single-character fragments are dropped EXCEPT digit-bearing ones:
-    # serially-numbered entity families (e.g. "Tesco Property Finance 1
-    # PLC" vs "... 3 PLC") are distinguished ONLY by that serial, so
-    # dropping it would collapse them into a confident wrong match.
-    # Keeping any token containing a digit preserves the serial as a
-    # distinguishing token. Legal forms are already removed upstream.
+    # Single-character fragments are dropped EXCEPT serials: serially
+    # numbered entity families ("Tesco Property Finance 1 PLC" vs "3
+    # PLC", "Fund V" vs "Fund X", "Trust 2023-A" vs "2023-B") are told
+    # apart ONLY by that serial, so dropping it would collapse them into
+    # a confident wrong match. A digit-bearing token, a roman I/V/X and
+    # a letter right after a number or a serial word are kept - even
+    # "a", otherwise a stopword. The cost: a Czech "v" or Polish "i" on
+    # one side only now counts as distinguishing, which gives NO_MATCH
+    # with details, never a wrong LEI. Legal forms are removed upstream.
     cleaned = normalized.replace("&", " and ").replace("-", " ")
     tokens = []
+    previous = ""
     for token in cleaned.split():
-        if token in _NAME_STOPWORDS:
+        serial_letter = len(token) == 1 and token.isalpha() and (
+            any(c.isdigit() for c in previous) or previous in _SERIAL_WORDS
+        )
+        previous = token
+        if serial_letter or token in _ROMAN_SINGLE:
+            tokens.append(token)
+        elif token in _NAME_STOPWORDS:
             continue
-        if len(token) >= 2 or any(c.isdigit() for c in token):
+        elif len(token) >= 2 or any(c.isdigit() for c in token):
             tokens.append(token)
     return tokens
 

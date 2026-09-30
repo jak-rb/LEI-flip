@@ -34,7 +34,12 @@ class WarningCode(str, Enum):
     #: lookup); the identity rests entirely on the identifier.
     NAME_UNVERIFIED = "NAME_UNVERIFIED"
     SINGLE_CANDIDATE_HEURISTIC = "SINGLE_CANDIDATE_HEURISTIC"
+    #: No country was given, or one that is not recognised, or the
+    #: matched record carries no country to check it against.
     COUNTRY_UNVERIFIED = "COUNTRY_UNVERIFIED"
+    #: The given country is neither the matched record's legal nor its
+    #: HQ country (an ISIN-based match, which does not gate on country).
+    COUNTRY_MISMATCH = "COUNTRY_MISMATCH"
     CHECK_FAILED = "CHECK_FAILED"
     #: Two or more DISTINCT LEIs cleared the name+address gate with
     #: near-equal confidence - the asserted LEI may be the wrong sibling

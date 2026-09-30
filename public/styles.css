@@ -703,6 +703,21 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
 /* Let the no-match notes wrap instead of forcing the table wide. */
 .table-nomatch td:last-child { white-space: normal; min-width: 18rem; }
 
+/* Flags under a matched row's legal name: a non-ISSUED LEI status and
+   the warnings that ask for a second look (the export lists them all). */
+.match-flags { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+.match-flag {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn);
+  color: var(--fg);
+  white-space: nowrap;
+}
+.match-flag-status { background: var(--bad-bg); border-color: var(--bad); }
+
 .gleif-link { color: var(--focus); font-weight: 600; text-decoration: none; white-space: nowrap; }
 .gleif-link:hover { text-decoration: underline; }
 

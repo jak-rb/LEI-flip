@@ -110,7 +110,8 @@ or `.txt` file of entities.
 
 It is a lean rebuild based on the core of the original LEI lookup tool created
 by Jakub Schrimpel: the precision-first matcher and GLEIF/ISIN resolution are
-kept as-is, and the app now lives on Vercel (Python runtime, Neon Postgres)
+kept (with the original's later precision fixes ported in), and the app now
+lives on Vercel (Python runtime, Neon Postgres)
 with no dependency on the bank's CodeNOW platform, which it was first built
 for.
 
@@ -171,7 +172,8 @@ core/              # backend lookup logic (ported + simplified from the original
   export.py        # build CSV / Excel from a search (reflects manual decisions)
   upload.py        # parse an uploaded .xlsx/.csv/.tsv/.txt into entities
 data/              # read-only lookup tables (committed)
-  country_mapping.json  # country name (cs/en) -> ISO alpha-2 code
+  country_mapping.json  # country name (cs/en/native) -> ISO alpha-2 code
+  country_alpha3.json   # ISO alpha-3 code -> alpha-2 code ("DEU" -> "DE")
   legal_forms.txt       # legal-form suffixes stripped before name matching
 templates/         # Jinja2 templates
   base.html        # shared layout (header, Help/Report-bugs dialogs, page shell)
@@ -281,7 +283,17 @@ original: when name+address yields no confident match, a validated ISIN
 (`core/isin.py`) can find a LEI directly, corroborate a near-miss, or - as a
 last resort - be resolved to an issuer name via OpenFIGI (`core/openfigi.py`)
 and re-searched; an ISIN-only input is resolved by GLEIF's authoritative ISIN
-mapping, with an OpenFIGI review fallback.
+mapping, with an OpenFIGI review fallback. A direct ISIN hit or an OpenFIGI
+candidate is not asserted when it lies in another country than the one given
+(`core/isin._other_country`), a direct hit also not when a name candidate with
+another LEI matches the name better (an ISIN of a parent or of the named
+manager's fund must not override the named entity), and the OpenFIGI fallback
+asserts only a unique best candidate. An ISIN mapping to several LEIs offers
+them in the stepper. The ISIN-based matches flag `COUNTRY_MISMATCH` or
+`COUNTRY_UNVERIFIED` unless the given country is recognised and is the
+record's; every other match flags `COUNTRY_UNVERIFIED` for a missing or
+unrecognised country. Among full matches within the ambiguity band a
+maintained LEI beats a dead twin (`core/lookup._finalize_full_match`).
 
 **The store** (`core/storage.py`) is one `searches` table: `job_id`,
 `created_at` (ISO-8601 UTC text), `mode`, `searched` (entities looked up so
@@ -319,7 +331,10 @@ by `record_failed_attempt`), and on Postgres the losing UPDATE waits on the
 row lock and re-checks its WHERE. While a save is pending the stepper
 disables its decision buttons; after it, the card's counts update from the
 reply's `counts`, and a failed save shows a bilingual message. The results
-page shows lookup notes in both languages (`core/notes.czech_note`). The overall percent shown
+page shows lookup notes in both languages (`core/notes.czech_note`), and each
+matched row flags a non-ISSUED LEI status and its warnings (all but
+`CHECK_FAILED`, which only means a missing street or ZIP), both languages,
+from the template's `flag_labels`. The overall percent shown
 per candidate is display-only (`core/lookup._overall_match`) and never gates
 a match.
 
@@ -378,14 +393,33 @@ normalizes like the original, as does a doubled-space copy of all but 4
 of 4,859. Those 4 are left as is: a trailing parenthetical is only
 stripped up to 20 characters, and doubled spaces inside one push it over.
 
+A focused test run on 2026-09-30 (six lenses plus skeptics) found that the
+rebuild's matcher predates the original tool's last precision fixes (its
+commit 24a4d7f, 2026-09-18). Those were ported: the narrow share-class
+patterns (`core/address._SHARE_CLASS_TOKEN`; RAIF/SIF moved to
+`data/legal_forms.txt`), single-letter serials as distinguishing tokens
+(I/V/X, and a letter after a number or a serial word such as "Fund" or
+"Series", `core/matcher._significant_tokens`) and the contradiction cap of
+79 (`ADDRESS_CONTRADICTION_CAP`). DUPLICATE and CANCELLED now count as not
+maintained, and the ISIN, country and review changes above came with it.
+Checked offline by replaying the old tool's 340-case adversarial baseline
+from its committed GLEIF snapshot (in the archive,
+`Desktop/_old/LEI-2026-09-22/tests/golden/offline_cache.jsonl.gz` - not
+copied into this public repo): wrong LEIs 5 -> 1 (the old tool's own "Simp"
+case), the one lost true match recovered, the four wrong-country ISIN rows
+now matched through ISIN plus name with `COUNTRY_MISMATCH`, and 105 of its
+109 labelled name pairs (was 104). "Compartment A" vs "B" still collapses:
+"compartment" is stripped as a legal form before its letter is seen.
+
 Feature-complete and deployable. Single and bulk search run against live
 GLEIF through the job endpoints, every search is persisted under a `job_id`
 (Postgres on Vercel, SQLite locally), and the results page, the manual
 validation workflow and the CSV/Excel downloads are real. `tests/` covers the
 store and the route flows with GLEIF faked; run it before every change to the
 web layer. Matching behaviour (thresholds in `core/constants.py`) is
-audit-validated and unchanged from the CodeNOW version (apart from the
-legal-form whitespace above) - re-run the matcher audit before tuning it.
+audit-validated and unchanged from the CodeNOW version apart from the
+legal-form whitespace and the 2026-09-30 precision fixes above - re-run the
+matcher audit (at least the offline replay) before tuning it.
 
 An optional LLM-assisted step (e.g. helping disambiguate near-misses) is a
 possible next addition; it would plug in after `core/lookup.lookup_entity`
