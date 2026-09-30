@@ -226,8 +226,12 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    columns (50 in the semicolon-lines mode), through a guarded zip archive
    that charges every read to a budget (50 MB unpacked, 1,000,000 XML
    nodes: room for some 500,000 shared strings from other sheets, about
-   5 s) and refuses DTDs, so a small crafted file cannot tie the function
-   up (the slowest crafted file is refused in about 9 s locally);
+   5 s; the stylesheet also has its own 200,000 nodes, as openpyxl spends
+   about 25 microseconds on each style node, and a number format longer
+   than Excel's 255 characters is refused, as openpyxl rescans it per
+   style) and refuses DTDs, so a small crafted file cannot tie the
+   function up (the slowest crafted stylesheet still read takes about 6 s
+   locally, a shared-strings one about 5 s);
    `core/upload._load_workbook` relies on openpyxl 3.1.5 internals
    (`ExcelReader.archive`), so re-check it when upgrading openpyxl.
    Cells are read as Excel shows them: `_xHHHH_` escapes are decoded, and

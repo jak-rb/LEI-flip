@@ -110,6 +110,21 @@ _LINE_COLUMNS = 50
 _MAX_READ_BYTES = 50 * 1024 * 1024
 _MAX_READ_NODES = 1_000_000
 
+#: Most XML nodes the stylesheet may hold, charged on top of the budget
+#: above. openpyxl builds objects for every style, at some 25
+#: microseconds a node, so 990,000 empty <xf/> in a 12 KB file took 23 s
+#: and 650 MB. Real workbooks have far fewer; this is room for some
+#: 25,000 cell formats (Excel allows 64,000 per workbook).
+_MAX_STYLE_NODES = 200_000
+
+#: openpyxl reads the stylesheet from this fixed part.
+_STYLES_PART = "xl/styles.xml"
+
+#: Longest number format code Excel saves. openpyxl rescans a format
+#: for every style that uses it, and the postal-code check reads it for
+#: every cell: one format of a million zeros in a 6 KB file took 325 s.
+_MAX_FORMAT_CODE = 255
+
 #: The last row of an Excel worksheet. A row numbered past it is not
 #: from Excel, and would make openpyxl yield every empty row before it.
 _LAST_ROW = 1_048_576
@@ -252,6 +267,7 @@ class _GuardedArchive(zipfile.ZipFile):
         super().__init__(file)
         self._bytes_left = _MAX_READ_BYTES
         self._nodes_left = _MAX_READ_NODES
+        self._style_nodes_left = _MAX_STYLE_NODES
 
     def open(self, name, mode="r", pwd=None, **kwargs):
         """Open a part whose reads are charged to the budget."""
@@ -261,7 +277,10 @@ class _GuardedArchive(zipfile.ZipFile):
             raise _TooMuchData
         part = super().open(info, mode, pwd, **kwargs)
         counter = xml.parsers.expat.ParserCreate()
-        counter.StartElementHandler = self._charge_nodes
+        counter.StartElementHandler = (
+            self._charge_style_nodes if info.filename == _STYLES_PART
+            else self._charge_nodes
+        )
         counter.StartDoctypeDeclHandler = _refuse_doctype
         read = part.read
 
@@ -287,6 +306,16 @@ class _GuardedArchive(zipfile.ZipFile):
         self._nodes_left -= 1 + len(attributes)
         if self._nodes_left < 0:
             raise _TooMuchData
+
+    def _charge_style_nodes(self, name, attributes) -> None:
+        """Charge a stylesheet node to both budgets; check its format."""
+        self._style_nodes_left -= 1 + len(attributes)
+        if (
+            self._style_nodes_left < 0
+            or len(attributes.get("formatCode", "")) > _MAX_FORMAT_CODE
+        ):
+            raise _TooMuchData
+        self._charge_nodes(name, attributes)
 
 
 def _refuse_doctype(*declaration) -> None:

@@ -503,6 +503,63 @@ def test_many_shared_strings_from_other_sheets_are_read():
     assert [entity.name for entity in entities] == ["Alfa a.s."]
 
 
+def _styles_with(section, body):
+    """Rewrite styles.xml, replacing one section's content."""
+    def rewrite(styles):
+        start = styles.index(b"<" + section)
+        end = styles.index(b"</" + section + b">") + len(section) + 3
+        return (
+            styles[:start] + b"<" + section + b">" + body + b"</"
+            + section + b">" + styles[end:]
+        )
+    return rewrite
+
+
+@pytest.mark.parametrize("section, style, count", [
+    # 990,000 empty cell formats in a 12 KB file took 23 s and 650 MB.
+    (b"cellXfs", b"<xf/>", 990_000),
+    (b"fonts", b"<font/>", 990_000),
+    (b"cellXfs", b"<xf><alignment/></xf>", 495_000),
+], ids=["formats", "fonts", "aligned-formats"])
+def test_a_stylesheet_of_countless_styles_is_refused_quickly(
+    section, style, count,
+):
+    _assert_too_much_data_quickly(_with_parts(_xlsx([["Alfa a.s."]]), {
+        "xl/styles.xml": _styles_with(section, style * count),
+    }))
+
+
+def test_a_stylesheet_with_many_formats_is_still_read():
+    formats = b"".join(
+        b'<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>'
+        for _ in range(20_000)
+    )
+    content = _with_parts(_xlsx([["Alfa a.s."]]), {
+        "xl/styles.xml": _styles_with(b"cellXfs", formats),
+    })
+    assert [e.name for e in parse_upload("in.xlsx", content)] == [
+        "Alfa a.s."
+    ]
+
+
+@pytest.mark.parametrize("zeros", [256, 1_000_000])
+def test_a_number_format_longer_than_excel_allows_is_refused(zeros):
+    # One format of a million zeros, used by 8,000 styles, took 325 s
+    # in openpyxl's stylesheet load; used by the postal-code cells of
+    # 1,100 rows, 383 s.
+    workbook = Workbook()
+    workbook.active.append(["Alfa a.s.", None, None, None, None, 1])
+    workbook.active["F1"].number_format = "00000"
+    saved = io.BytesIO()
+    workbook.save(saved)
+    content = _with_parts(saved.getvalue(), {
+        "xl/styles.xml": lambda old: old.replace(
+            b'formatCode="00000"', b'formatCode="' + b"0" * zeros + b'"',
+        ),
+    })
+    _assert_too_much_data_quickly(content)
+
+
 def test_one_chart_drawn_many_times_is_refused_quickly():
     workbook = Workbook()
     workbook.active.append(["Tiny company", 1])
