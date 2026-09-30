@@ -451,15 +451,20 @@ maintained, and the ISIN, country and review changes above came with it.
 Checked offline by replaying the old tool's 340-case adversarial baseline
 from its committed GLEIF snapshot (in the archive,
 `Desktop/_old/LEI-2026-09-22/tests/golden/offline_cache.jsonl.gz` - not
-copied into this public repo): wrong LEIs 5 -> 1 (the old tool's own "Simp"
-case), the one lost true match recovered, the four wrong-country ISIN rows
-now matched through ISIN plus name with `COUNTRY_MISMATCH`, and 105 of its
-109 labelled name pairs (was 104). "Compartment A" vs "B" still collapses:
+copied into this public repo; the replay scripts and today's expected
+output are in the gitignored `docs/offline-replay/`): wrong LEIs 5 -> 1
+(the old tool's own "Simp" case), the one lost true match recovered, the
+four wrong-country ISIN rows now matched through ISIN plus name with
+`COUNTRY_MISMATCH`, and 105 of its 109 labelled name pairs (was 104). "Compartment A" vs "B" still collapses:
 "compartment" is stripped as a legal form before its letter is seen.
 `normalize_name` also drops invisible format characters before the legal
 forms (a trailing zero-width space kept "Allianz SE" from matching) and
 turns U+0085 into a space (`core/address._drop_invisible`); the replay
-is unchanged by it.
+is unchanged by it. Still open after that run: no rate limit on creating
+jobs (anyone can fill the store; a Vercel Firewall rule or sign-in is
+the owner's call), nothing has run on Python 3.12 or a real Postgres
+here (a throwaway Neon branch would do the latter), and a date or
+boolean in the name column is looked up as its text.
 
 Feature-complete and deployable. Single and bulk search run against live
 GLEIF through the job endpoints, every search is persisted under a `job_id`
