@@ -97,7 +97,7 @@ def test_prune_drops_rows_past_retention():
 def test_get_all_searches_returns_columns_and_newest_first():
     first = _job()
     second = _job()
-    columns, rows = storage.get_all_searches()
+    columns, rows = storage.get_all_searches(1000)
     assert columns[:2] == ["job_id", "created_at"]
     ids = [row["job_id"] for row in rows]
     assert ids.index(second) < ids.index(first)

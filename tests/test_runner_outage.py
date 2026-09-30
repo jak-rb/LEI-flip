@@ -56,6 +56,9 @@ class _FakeSession:
         self.headers = {}
         self.calls = []
 
+    def mount(self, prefix, adapter):
+        pass
+
     def get(self, url, params=None, timeout=None, stream=False):
         params = dict(params or {})
         self.calls.append({"params": params, "timeout": timeout})
@@ -136,7 +139,7 @@ def session(monkeypatch, clock):
     """The fake HTTP session of each GleifClient (GLEIF: empty)."""
     fake = _FakeSession(lambda params, timeout: _response())
     monkeypatch.setattr(gleif.requests, "Session", lambda: fake)
-    monkeypatch.setattr(openfigi.requests, "post", _no_openfigi)
+    monkeypatch.setattr(openfigi, "_post", _no_openfigi)
     return fake
 
 
@@ -393,7 +396,7 @@ def test_short_rate_limit_wait_does_not_hide_a_too_slow_lookup(
     # Each call's first request is rate-limited for 1 s, then every
     # request takes 9 s: the lookup needs longer than a whole call and
     # hardly any of it went on the rate limit, so it is given up.
-    monkeypatch.setattr(openfigi.requests, "post", _openfigi_two_names)
+    monkeypatch.setattr(openfigi, "_post", _openfigi_two_names)
     slow = _answer_after(clock, 9)
     state = {"first": True}
 
@@ -425,7 +428,7 @@ def test_earlier_lookups_rate_limit_does_not_make_a_cut_off_throttled(
 ):
     # Alpha waits out a 5 s rate limit and ends quickly; Slow then
     # starts, and its 9 s requests run into the call's deadline.
-    monkeypatch.setattr(openfigi.requests, "post", _openfigi_two_names)
+    monkeypatch.setattr(openfigi, "_post", _openfigi_two_names)
     state = {"limited": True}
     slow = _answer_after(clock, 9)
 
@@ -484,7 +487,7 @@ def test_lookup_whose_deadline_went_on_a_rate_limit_is_not_too_slow(
             raise requests.ConnectionError("OpenFIGI is offline")
         clock.now += timeout
         raise requests.Timeout("OpenFIGI read timed out")
-    monkeypatch.setattr(openfigi.requests, "post", hanging_openfigi)
+    monkeypatch.setattr(openfigi, "_post", hanging_openfigi)
     job_id = _create_job(client, [f",{ISIN}"])
 
     for _ in range(app_module.RUN_MAX_ATTEMPTS + 2):
@@ -511,7 +514,7 @@ def test_lookup_a_rate_limit_pushed_past_the_deadline_is_not_too_slow(
     # call's 120. A rate limit of under a minute (GLEIF counts
     # requests per minute) at each call's first request pushes it
     # past the deadline, and that is the rate limit's doing.
-    monkeypatch.setattr(openfigi.requests, "post", _openfigi_two_names)
+    monkeypatch.setattr(openfigi, "_post", _openfigi_two_names)
     four_seconds = _answer_after(clock, 4)
     state = {"first": True, "limiting": True}
 

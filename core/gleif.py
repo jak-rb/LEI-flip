@@ -11,6 +11,8 @@ import json
 import logging
 import math
 import re
+import socket
+import threading
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -18,7 +20,10 @@ from typing import Optional
 
 import requests
 import urllib3
+from requests.adapters import HTTPAdapter
 from unidecode import unidecode
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 from .constants import GLEIF_BASE_URL, REQUEST_TIMEOUT
 from .models import GleifAddress, GleifCandidate
@@ -43,6 +48,13 @@ _TRANSIENT_CLIENT_ERRORS = (408, 425)
 
 # Most bytes taken from a reply body at a time (see read_body).
 _READ_SIZE = 64 * 1024
+
+# Seconds past its deadline a request may run before a DeadlineWatch
+# shuts its socket down.
+_WATCH_GRACE = 1.0
+
+# The DeadlineWatch active in this thread, if any.
+_watching = threading.local()
 
 # The query of GleifClient.is_answering: a full-text search like the
 # first one of every name search, for a single record.
@@ -131,14 +143,127 @@ def _retry_after(resp: requests.Response, default: float) -> float:
     return min(max(seconds, 0.0), MAX_RETRY_AFTER)
 
 
+class DeadlineWatch:
+    """Shut a request's socket down once its deadline has passed.
+
+    requests' timeout bounds each socket read, not a whole request.
+    Headers, a redirect chain, interim 1xx replies, or a compressed or
+    chunked body trickling in byte by byte can outlast the deadline by
+    far: urllib3 and http.client make many reads inside one call, which
+    read_body's check between calls does not see. While a watch is
+    active in a thread, the connections of a watched_session tell it
+    which one the request uses, and a timer shuts that connection's
+    socket down at the deadline plus _WATCH_GRACE. The blocked read then
+    fails, and the request ends as a connection error past the deadline,
+    which the callers report as a cut-off. DNS resolution and the TLS
+    handshake are not covered.
+
+    Args:
+        deadline: Optional ``time.monotonic()`` value; None watches
+            nothing.
+    """
+
+    def __init__(self, deadline: Optional[float]) -> None:
+        self._lock = threading.Lock()
+        self._connection = None
+        self._timer = None
+        if deadline is not None:
+            delay = max(deadline - time.monotonic(), 0.0) + _WATCH_GRACE
+            self._timer = threading.Timer(delay, self._shut_down)
+            self._timer.daemon = True
+
+    def __enter__(self) -> "DeadlineWatch":
+        if self._timer is not None:
+            _watching.watch = self
+            self._timer.start()
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        with self._lock:
+            # Back in the pool, the connection may serve another request.
+            self._connection = None
+            if self._timer is not None:
+                self._timer.cancel()
+        _watching.watch = None
+        return False
+
+    def track(self, connection) -> None:
+        """Record the connection the request now uses."""
+        with self._lock:
+            self._connection = connection
+
+    def _shut_down(self) -> None:
+        """Shut the tracked connection's socket down (timer thread)."""
+        with self._lock:
+            sock = getattr(self._connection, "sock", None)
+            if sock is None:
+                return
+            logger.warning("Request past its deadline; closing its socket")
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+class _TrackedConnectionMixin:
+    """Tells the thread's active DeadlineWatch which connection is used."""
+
+    def request(self, *args, **kwargs):
+        watch = getattr(_watching, "watch", None)
+        if watch is not None:
+            watch.track(self)
+        return super().request(*args, **kwargs)
+
+
+class _TrackedHTTPConnection(_TrackedConnectionMixin, HTTPConnection):
+    """An HTTP connection a DeadlineWatch can reach."""
+
+
+class _TrackedHTTPSConnection(_TrackedConnectionMixin, HTTPSConnection):
+    """An HTTPS connection a DeadlineWatch can reach."""
+
+
+class _TrackedHTTPPool(HTTPConnectionPool):
+    """A connection pool of _TrackedHTTPConnection."""
+
+    ConnectionCls = _TrackedHTTPConnection
+
+
+class _TrackedHTTPSPool(HTTPSConnectionPool):
+    """A connection pool of _TrackedHTTPSConnection."""
+
+    ConnectionCls = _TrackedHTTPSConnection
+
+
+class _TrackedAdapter(HTTPAdapter):
+    """A requests adapter whose connections a DeadlineWatch can reach."""
+
+    def init_poolmanager(self, *args, **kwargs) -> None:
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = {
+            "http": _TrackedHTTPPool,
+            "https": _TrackedHTTPSPool,
+        }
+
+
+def watched_session() -> requests.Session:
+    """A requests session whose requests a DeadlineWatch can cut off."""
+    session = requests.Session()
+    adapter = _TrackedAdapter()
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
 def read_body(resp: requests.Response, deadline: Optional[float]) -> bytes:
     """A streamed reply's body, read until it ends or the deadline.
 
     requests' timeout bounds each socket read, not the whole reply, so
     a body that trickles in byte by byte could outlast the deadline by
-    far. Each read here takes what one socket read brings, and the
-    deadline is checked in between: reading stops at most one request
-    timeout after it. The reply is closed either way.
+    far. Each read here takes what one socket read brings (more, inside
+    urllib3, for a compressed or chunked body), and the deadline is
+    checked in between; the request's DeadlineWatch bounds the reads
+    between two checks. The reply is closed either way.
 
     Args:
         resp: A reply requested with ``stream=True``.
@@ -260,7 +385,7 @@ class GleifClient:
         self._timeout = timeout
         self.deadline: Optional[float] = None
         self.rate_limit_waits: list[float] = []
-        self._session = requests.Session()
+        self._session = watched_session()
         self._session.headers.update({"Accept": "application/vnd.api+json"})
 
     def __enter__(self):
@@ -306,7 +431,7 @@ class GleifClient:
         so callers have a single exception type to catch. No attempt
         or retry starts after the deadline, each attempt's timeout is
         cut to the time left, and the reply is read only until the
-        deadline (see read_body).
+        deadline (see read_body and DeadlineWatch).
 
         Args:
             path: API path appended to the GLEIF base URL.
@@ -335,11 +460,12 @@ class GleifClient:
             if time_left <= 0:
                 raise self._cut_off()
             try:
-                resp = self._session.get(
-                    url, params=params,
-                    timeout=min(self._timeout, time_left), stream=True,
-                )
-                body = read_body(resp, self.deadline)
+                with DeadlineWatch(self.deadline):
+                    resp = self._session.get(
+                        url, params=params,
+                        timeout=min(self._timeout, time_left), stream=True,
+                    )
+                    body = read_body(resp, self.deadline)
             except requests.RequestException as e:
                 # Past the deadline, the likely cause is the timeout
                 # that was cut to fit it: a cut-off, not an outage.

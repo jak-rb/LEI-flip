@@ -179,7 +179,7 @@ templates/         # Jinja2 templates
   base.html        # shared layout (header, Help/Report-bugs dialogs, page shell)
   index.html       # single + bulk lookup forms (submit creates a job, goes to /results)
   results.html     # /results: summary card (live while running), stepper, tables
-  admin.html       # hidden /admin page: full dump of the searches table (no auth)
+  admin.html       # hidden /admin page: the searches table, 5 rows a page (no auth)
 public/            # static files, served by Vercel's CDN at the site root
   styles.css       # all styling
   app.js           # vanilla JS: dialogs, forms, job runner loop, validation stepper
@@ -276,8 +276,13 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    left it less than `RUN_DEADLINE_SECONDS - RUN_TIME_BUDGET_SECONDS` of
    its own time. requests' timeout bounds each socket read, not a whole
    reply, so GLEIF and OpenFIGI replies are streamed and read one socket
-   read at a time (`core/gleif.read_body`): a reply that trickles in stops
-   at most one request timeout past the deadline.
+   read at a time (`core/gleif.read_body`), and each request runs under a
+   `core/gleif.DeadlineWatch`: the connections of a `watched_session`
+   report themselves to it, and a timer shuts the socket down 1 s after
+   the deadline (`_WATCH_GRACE`). That also ends headers, redirects, 1xx
+   replies and gzip or chunked bodies that trickle in, where urllib3 and
+   http.client read many times inside one call; DNS and the TLS handshake
+   stay bounded only per read. Tests fake OpenFIGI at `openfigi._post`.
 4. When `done` the page reloads and the server renders the detailed tables.
 
 Each stored result row is the entity's `input`, its `match` (a `LookupResult`)
@@ -313,7 +318,17 @@ The backend is chosen at import from the environment: `DATABASE_URL` (or
 `POSTGRES_URL`) selects Postgres through psycopg, otherwise SQLite at
 `LEI_DB_PATH` or under the system temp dir. Both share one DDL and one set of
 `%s`-placeholder statements (rewritten to `?` for SQLite); the schema is
-created lazily on first use, once per process.
+created lazily on first use, once per process (on Postgres under an
+advisory lock, as `CREATE TABLE IF NOT EXISTS` races between cold starts).
+On Vercel (`VERCEL`/`VERCEL_ENV` set) the SQLite fallback is refused:
+with no database URL every store call raises `storage.StoreUnavailable`,
+answered 503 with `error`/`error_cs` (plain text for a page), and
+`/health` says DOWN - a per-instance `/tmp` file once lost searches
+silently. A Postgres connection gives up after 10 s, uses TCP keepalives
+and a TCP user timeout (`_PG_CONNECT_OPTIONS`), sets `SET LOCAL
+statement_timeout = '30s'` at the start of each transaction (Neon's
+pooler refuses startup options), and turns server-side prepared
+statements off.
 
 **The `/results` page, decisions and downloads** work as before: a summary
 card with the four counts (Searched `x / total`, Matched, Need validation,

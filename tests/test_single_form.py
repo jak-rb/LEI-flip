@@ -395,6 +395,9 @@ class _FakeSession:
         self.headers = {}
         self.calls = []
 
+    def mount(self, prefix, adapter):
+        pass
+
     def get(self, url, params=None, timeout=None, stream=False):
         self.calls.append(dict(params or {}))
         return self.handler(dict(params or {}))
@@ -426,7 +429,7 @@ def _no_openfigi(*args, **kwargs):
 def session(monkeypatch):
     fake = _FakeSession(lambda params: _response())
     monkeypatch.setattr(gleif.requests, "Session", lambda: fake)
-    monkeypatch.setattr(openfigi.requests, "post", _no_openfigi)
+    monkeypatch.setattr(openfigi, "_post", _no_openfigi)
     return fake
 
 

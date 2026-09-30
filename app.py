@@ -97,6 +97,28 @@ def request_too_large(error):
     }, 413
 
 
+@app.errorhandler(storage.StoreUnavailable)
+def store_unavailable(error):
+    """Answer 503 when no database is configured on Vercel.
+
+    The store refuses a per-instance SQLite file there (see
+    core/storage.py), so every store-backed route ends up here: JSON
+    for the page's API calls, plain text for a page navigation.
+    """
+    message = {
+        "error": "The search store is not available. Please try again "
+                 "later.",
+        "error_cs": "Úložiště vyhledávání není dostupné. Zkuste to prosím "
+                    "později.",
+    }
+    if request.path.startswith("/api/"):
+        return message, 503
+    return (
+        f"{message['error']}\n{message['error_cs']}\n", 503,
+        {"Content-Type": "text/plain; charset=utf-8"},
+    )
+
+
 # Allowed bulk-upload extensions. The browser checks this too, but a
 # request can reach the server without going through our JavaScript,
 # so the server must enforce the rule itself.
@@ -148,7 +170,9 @@ GLEIF_TOO_SLOW_NOTE = (
 
 @app.route("/health")
 def health():
-    """Liveness probe."""
+    """Liveness probe; DOWN when no database is configured on Vercel."""
+    if not storage.store_configured():
+        return jsonify(status="DOWN"), 503
     return jsonify(status="UP"), 200
 
 
@@ -157,15 +181,28 @@ def index():
     return render_template("index.html")
 
 
+#: Searches per /admin page. A 100-entity search takes some 300 KB of
+#: the page, and Vercel refuses a function response over 4.5 MB.
+ADMIN_PAGE_SIZE = 5
+
+
 @app.route("/admin")
 def admin():
     """Unlinked page dumping the whole searches table (no auth).
 
     Not reachable from any link - the URL has to be typed. It renders
-    every column and row of the searches table and nothing else.
+    every column of the searches table, ADMIN_PAGE_SIZE rows a page
+    (``?page=``, newest first), and nothing else.
     """
-    columns, rows = storage.get_all_searches()
-    return render_template("admin.html", columns=columns, rows=rows)
+    page = max(request.args.get("page", 1, type=int), 1)
+    # One row more than a page, to tell whether an older page exists.
+    columns, rows = storage.get_all_searches(
+        ADMIN_PAGE_SIZE + 1, (page - 1) * ADMIN_PAGE_SIZE,
+    )
+    return render_template(
+        "admin.html", columns=columns, rows=rows[:ADMIN_PAGE_SIZE],
+        page=page, older=len(rows) > ADMIN_PAGE_SIZE,
+    )
 
 
 def _entity_input(entity: InputEntity) -> dict:

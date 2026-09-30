@@ -47,6 +47,9 @@ class _FakeSession:
         self.headers = {}
         self.calls = []
 
+    def mount(self, prefix, adapter):
+        pass
+
     def get(self, url, params=None, timeout=None, stream=False):
         params = dict(params or {})
         self.calls.append({"params": params, "timeout": timeout})
@@ -106,7 +109,7 @@ def session(monkeypatch, clock):
     """The fake HTTP session of each GleifClient (GLEIF: empty)."""
     fake = _FakeSession(lambda params, timeout: _response())
     monkeypatch.setattr(gleif.requests, "Session", lambda: fake)
-    monkeypatch.setattr(openfigi.requests, "post", _no_openfigi)
+    monkeypatch.setattr(openfigi, "_post", _no_openfigi)
     return fake
 
 
@@ -231,7 +234,7 @@ def test_openfigi_tolerates_unexpected_reply_shapes(
     monkeypatch, body, names,
 ):
     monkeypatch.setattr(
-        openfigi.requests, "post",
+        openfigi, "_post",
         lambda *args, **kwargs: _response(text=json.dumps(body)),
     )
     assert openfigi.resolve_isin_to_names(ISIN) == names
@@ -241,7 +244,7 @@ def test_isin_only_job_finishes_when_openfigi_names_are_null(
     client, monkeypatch,
 ):
     monkeypatch.setattr(
-        openfigi.requests, "post",
+        openfigi, "_post",
         lambda *args, **kwargs: _response(body=[{"data": [{"name": None}]}]),
     )
     job_id = _create_job(client, [f",{ISIN}"])
@@ -611,7 +614,7 @@ def test_lookup_that_never_fits_in_a_call_is_given_up(
 ):
     # Every request takes 9 s and the lookup makes 20 of them: it needs
     # longer than a whole call, so repeating it can never help.
-    monkeypatch.setattr(openfigi.requests, "post", _openfigi_two_names)
+    monkeypatch.setattr(openfigi, "_post", _openfigi_two_names)
     session.handler = _answer_after(clock, 9)
     job_id = _create_job(client, [f"Alpha a.s.,{ISIN},CZ,Praha"])
 
@@ -646,7 +649,7 @@ def test_gleif_that_is_slow_or_flaky_but_answers_fails_no_entity(
     # Each lookup makes 20 requests. Answered in 2.5 s each, or with a
     # quarter of them hanging for the whole timeout first, it outlasts
     # the budget but fits well within one call's deadline.
-    monkeypatch.setattr(openfigi.requests, "post", _openfigi_two_names)
+    monkeypatch.setattr(openfigi, "_post", _openfigi_two_names)
     session.handler = (
         _answer_after(clock, 2.5) if gleif_kind == "slow" else _flaky(clock)
     )
@@ -678,7 +681,7 @@ def test_openfigi_request_stops_at_the_deadline(monkeypatch, clock):
         timeouts.append(timeout)
         clock.now += timeout
         raise requests.Timeout("read timed out")
-    monkeypatch.setattr(openfigi.requests, "post", post)
+    monkeypatch.setattr(openfigi, "_post", post)
 
     deadline = clock.now + 3
     with pytest.raises(DeadlineExceeded):
@@ -778,7 +781,7 @@ def test_openfigi_reply_that_trickles_in_stops_at_the_deadline(
     monkeypatch, clock,
 ):
     monkeypatch.setattr(
-        openfigi.requests, "post",
+        openfigi, "_post",
         lambda *args, **kwargs: _trickling(
             clock, body=[{"data": [{"name": "APPLE INC"}]}],
         ),

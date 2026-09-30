@@ -22,9 +22,20 @@ from typing import Optional
 import requests
 
 from .constants import OPENFIGI_BASE_URL, OPENFIGI_TIMEOUT
-from .gleif import DeadlineExceeded, read_body
+from .gleif import (
+    DeadlineExceeded,
+    DeadlineWatch,
+    read_body,
+    watched_session,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _post(url: str, **kwargs) -> requests.Response:
+    """POST through a session whose requests a DeadlineWatch can cut off."""
+    with watched_session() as session:
+        return session.post(url, **kwargs)
 
 
 def resolve_isin_to_names(
@@ -42,7 +53,8 @@ def resolve_isin_to_names(
         isin: The normalised (upper-cased, space-free) ISIN.
         deadline: Optional ``time.monotonic()`` value. The request does
             not start after it, its timeout is cut to the time left,
-            and the reply is read only until it (see read_body).
+            and the reply is read only until it (see read_body and
+            DeadlineWatch).
 
     Returns:
         Unique issuer names in the order returned, or an empty list.
@@ -65,14 +77,15 @@ def resolve_isin_to_names(
         timeout = min(timeout, time_left)
 
     try:
-        resp = requests.post(
-            OPENFIGI_BASE_URL,
-            json=[{"idType": "ID_ISIN", "idValue": isin}],
-            headers=headers,
-            timeout=timeout,
-            stream=True,
-        )
-        body = read_body(resp, deadline)
+        with DeadlineWatch(deadline):
+            resp = _post(
+                OPENFIGI_BASE_URL,
+                json=[{"idType": "ID_ISIN", "idValue": isin}],
+                headers=headers,
+                timeout=timeout,
+                stream=True,
+            )
+            body = read_body(resp, deadline)
         resp.raise_for_status()
         data = json.loads(body)
     except requests.RequestException as e:
