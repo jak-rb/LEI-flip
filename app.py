@@ -40,7 +40,7 @@ from core.lookup import lookup_entity
 from core.models import InputEntity, InputError, LookupResult, is_blank
 from core.notes import czech_note
 from core.openfigi import OpenFigiUnavailable
-from core.upload import parse_upload
+from core.upload import parse_pasted_rows, parse_upload
 
 logging.basicConfig(
     level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
@@ -369,9 +369,19 @@ def _bulk_entities() -> list[InputEntity]:
     return parse_upload(filename, upload.read())
 
 
+def _pasted_entities() -> list[InputEntity]:
+    """The entities of the rows pasted into the bulk form.
+
+    Raises:
+        InputError: With the message to show when the rows are unusable.
+    """
+    return parse_pasted_rows(request.form.get("rows", ""))
+
+
 @app.route("/api/jobs", methods=["POST"])
 def create_job():
-    """Create a search job from the single form or a bulk upload.
+    """Create a search job from the single form, a bulk upload or rows
+    pasted into the bulk form (``mode`` "single", "bulk" or "paste").
 
     Validates the input and stores the entities to look up under a new
     ``job_id`` (nothing is looked up yet). Returns ``{"job_id", "total"}``,
@@ -379,9 +389,15 @@ def create_job():
     Czech) when the input is unusable, so the search page can show it
     next to its Search button.
     """
-    mode = "bulk" if request.form.get("mode") == "bulk" else "single"
+    mode = request.form.get("mode")
     try:
-        entities = _bulk_entities() if mode == "bulk" else _single_entities()
+        if mode == "bulk":
+            entities = _bulk_entities()
+        elif mode == "paste":
+            entities = _pasted_entities()
+        else:
+            mode = "single"
+            entities = _single_entities()
     except ValueError as error:
         # An InputError carries its Czech version; any other error only
         # has its own text.

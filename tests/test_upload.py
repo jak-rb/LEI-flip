@@ -308,9 +308,11 @@ def test_delimiter_detection_skips_leading_blank_lines():
 def test_too_many_entities_stops_early_and_says_more_than():
     english, czech = _refusal(_csv([GOOD_ROW] * 150))
     assert english == (
-        f"{TOO_MANY_EN} The maximum is {MAX_ENTITIES} per file."
+        f"{TOO_MANY_EN} The maximum is {MAX_ENTITIES} per search."
     )
-    assert czech == f"{TOO_MANY_CS} Maximum je {MAX_ENTITIES} na soubor."
+    assert czech == (
+        f"{TOO_MANY_CS} Maximum je {MAX_ENTITIES} na jedno vyhledávání."
+    )
 
     started = time.perf_counter()
     english, _ = _refusal(b"A\n" * 2_000_000, "big.txt")

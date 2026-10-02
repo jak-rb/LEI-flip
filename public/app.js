@@ -15,7 +15,8 @@ const STRINGS = {
         needNameOrIsin: "Please enter an entity name or an ISIN",
         selectFile: "Please select a .xlsx, .csv, .tsv or .txt file",
         selectFileFirst: "Please select a file first",
-        tooLarge: "That file is too large. The maximum upload size is 4 MB.",
+        pasteRowsFirst: "Please paste the rows first",
+        tooLarge: "The request is too large (max 4 MB).",
         couldNotStart: "The search could not be started. Please try again.",
         unreachable: "Could not reach the server. Please try again.",
         unreachableResume: "Could not reach the server. Reload the page to resume.",
@@ -40,7 +41,8 @@ const STRINGS = {
         needNameOrIsin: "Zadejte název subjektu nebo ISIN",
         selectFile: "Vyberte soubor .xlsx, .csv, .tsv nebo .txt",
         selectFileFirst: "Nejprve vyberte soubor",
-        tooLarge: "Soubor je příliš velký. Maximální velikost je 4 MB.",
+        pasteRowsFirst: "Nejprve vložte řádky",
+        tooLarge: "Požadavek je příliš velký (max. 4 MB).",
         couldNotStart: "Vyhledávání se nepodařilo spustit. Zkuste to prosím znovu.",
         unreachable: "Server není dostupný. Zkuste to prosím znovu.",
         unreachableResume: "Server není dostupný. Obnovte stránku pro pokračování.",
@@ -349,8 +351,9 @@ function setupSingleForm() {
     });
 }
 
-// Bulk lookup: a file must be selected. Reflect the chosen filename in the
-// file-list box and block submission when nothing is picked.
+// Bulk lookup: a file, or rows pasted from Excel, whichever the switch
+// shows; Search sends only that one. Reflect the chosen filename in the
+// file-list box and block submission when nothing is picked or pasted.
 function setupBulkForm() {
     const form = document.querySelector(".upload-form");
     if (!form) {
@@ -361,6 +364,42 @@ function setupBulkForm() {
     const fileCount = form.querySelector(".file-count");
     const fileItems = form.querySelector(".file-list-items");
     const dropzone = form.querySelector(".dropzone");
+    const pasteInput = form.querySelector("#pasted_rows");
+    const sourceButtons = Array.from(form.querySelectorAll(".source-btn"));
+    const panels = Array.from(form.querySelectorAll(".source-panel"));
+    let source = "file";
+
+    // Show the file or the paste panel, and put the cursor in the paste
+    // box, so Ctrl+V right after the switch lands there.
+    function showSource(next) {
+        source = next;
+        sourceButtons.forEach((button) => {
+            const isActive = button.getAttribute("data-source") === next;
+            button.classList.toggle("is-active", isActive);
+            button.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+        panels.forEach((panel) => {
+            panel.hidden = panel.getAttribute("data-panel") !== next;
+        });
+        clearFormError(form);
+        if (next === "paste" && pasteInput) {
+            pasteInput.focus();
+        }
+    }
+
+    sourceButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            showSource(button.getAttribute("data-source"));
+        });
+    });
+
+    if (pasteInput) {
+        pasteInput.addEventListener("input", () => {
+            if (pasteInput.value.trim()) {
+                clearFormError(form);
+            }
+        });
+    }
 
     // Only .xlsx, .csv, .tsv and .txt are accepted. The input's "accept"
     // attribute is just a picker hint, and drag-and-drop ignores it, so check
@@ -463,18 +502,31 @@ function setupBulkForm() {
 
     form.addEventListener("submit", (event) => {
         event.preventDefault();
-        const file = fileInput && fileInput.files[0];
-        if (!file) {
-            showFormError(form, both("selectFileFirst"));
-            return;
+        // The server parses the file or the rows when it creates the job,
+        // so a problem (wrong type, empty, no usable rows, too many rows)
+        // comes straight back as the 400 message shown next to Search.
+        const formData = new FormData();
+        if (source === "paste") {
+            const rows = pasteInput ? pasteInput.value : "";
+            if (!rows.trim()) {
+                showFormError(form, both("pasteRowsFirst"));
+                if (pasteInput) {
+                    pasteInput.focus();
+                }
+                return;
+            }
+            formData.set("mode", "paste");
+            formData.set("rows", rows);
+        } else {
+            const file = fileInput && fileInput.files[0];
+            if (!file) {
+                showFormError(form, both("selectFileFirst"));
+                return;
+            }
+            formData.set("mode", "bulk");
+            formData.set("file_upload", file);
         }
         clearFormError(form);
-        // The server parses the file when it creates the job, so a problem
-        // (wrong type, empty, no usable rows, too many rows) comes straight
-        // back as the 400 message shown next to Search.
-        const formData = new FormData();
-        formData.set("mode", "bulk");
-        formData.set("file_upload", file);
         submitSearch(form, formData);
     });
 }

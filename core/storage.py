@@ -271,7 +271,7 @@ def create_search(job_id: str, mode: str, query: list) -> None:
 
     Args:
         job_id: Random id identifying this search.
-        mode: "single" or "bulk".
+        mode: "single", "bulk" or "paste".
         query: The entities' input fields, one dict per entity, in the
             order they will be looked up.
     """

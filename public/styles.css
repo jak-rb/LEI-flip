@@ -518,6 +518,60 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
 
 .file-remove:hover { color: var(--bad); }
 
+/* File / pasted rows switch: styled like the CZ/EN switch, in the
+   card's colours. Only the chosen panel shows. */
+.source-switch {
+  display: flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+}
+
+.source-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.42rem 0.8rem;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.source-btn:hover { color: var(--fg); }
+.source-btn.is-active { background: var(--fg); color: var(--bg); }
+
+.source-panel { display: flex; flex-direction: column; gap: 1.25rem; }
+.source-panel[hidden] { display: none; }
+
+/* Rows stay one line each (wrap="off") and tabs keep them in columns. */
+.paste-box {
+  width: 100%;
+  min-height: 11.5rem;
+  padding: 0.68rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  tab-size: 4;
+  resize: vertical;
+  transition: border-color 0.15s ease;
+}
+
+.paste-box::placeholder { color: var(--faint); white-space: pre-wrap; }
+.paste-box:hover { border-color: var(--faint); }
+.paste-box:focus { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--line); }
+
 /* ---- Results summary card ------------------------------------------------ */
 
 .results-card {

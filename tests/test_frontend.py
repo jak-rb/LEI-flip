@@ -4,9 +4,10 @@
 Covers script-written messages following a CZ/EN switch (form errors,
 server errors and the results card), the Search button staying
 disabled once the results page is on its way, an explicit theme
-choice beating a later OS colour-scheme change, and the OpenFIGI pause
-countdown. A tiny fake DOM stands in for the page; the tests are
-skipped when Node is not on PATH.
+choice beating a later OS colour-scheme change, the OpenFIGI pause
+countdown, and the bulk form's file / pasted rows switch. A tiny fake
+DOM stands in for the page; the tests are skipped when Node is not on
+PATH.
 """
 
 import json
@@ -152,6 +153,114 @@ const seen = [];
 })().catch((error) => { console.error(error); process.exit(1); });
 """
 
+#: The bulk form alone: its switch, both panels and the paste box.
+_BULK_HARNESS = r"""
+"use strict";
+const fs = require("fs");
+const vm = require("vm");
+
+let focused = null;
+class Element {
+    constructor(attributes = {}) {
+        this.attributes = { ...attributes };
+        this.listeners = {};
+        this.textContent = "";
+        this.disabled = false;
+        this.hidden = false;
+        this.value = "";
+        this.files = [];
+        this.classList = { toggle() {}, add() {}, remove() {} };
+    }
+    getAttribute(name) {
+        return name in this.attributes ? this.attributes[name] : null;
+    }
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+    removeAttribute(name) { delete this.attributes[name]; }
+    addEventListener(type, listener) {
+        (this.listeners[type] = this.listeners[type] || []).push(listener);
+    }
+    fire(type, event = {}) {
+        (this.listeners[type] || []).forEach((listener) => listener(event));
+    }
+    focus() { focused = this; }
+}
+
+const els = {
+    ".form-error": new Element(),
+    "button[type=submit]": new Element(),
+    "#file_upload": new Element(),
+    "#pasted_rows": new Element({ id: "pasted_rows" }),
+};
+const buttons = {
+    file: new Element({ "data-source": "file", "aria-pressed": "true" }),
+    paste: new Element({ "data-source": "paste", "aria-pressed": "false" }),
+};
+const panels = {
+    file: new Element({ "data-panel": "file" }),
+    paste: new Element({ "data-panel": "paste" }),
+};
+panels.paste.hidden = true;
+const form = new Element();
+form.querySelector = (selector) => els[selector] || null;
+form.querySelectorAll = (selector) => ({
+    ".source-btn": [buttons.file, buttons.paste],
+    ".source-panel": [panels.file, panels.paste],
+})[selector] || [];
+
+const html = new Element();
+html.lang = "en";
+const document = {
+    documentElement: html,
+    addEventListener() {},
+    getElementById: () => null,
+    querySelector: (selector) => (selector === ".upload-form" ? form : null),
+    querySelectorAll: () => [],
+};
+const window = { location: { href: "/" }, addEventListener() {} };
+let sent = null;
+async function fetch(url, options) {
+    sent = Object.fromEntries(options.body.entries());
+    return { ok: true, status: 200, json: async () => ({ job_id: "abc" }) };
+}
+
+const context = vm.createContext({
+    document, window, fetch, console, FormData,
+    localStorage: { getItem: () => null, setItem() {} },
+});
+vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), context);
+vm.runInContext("setupBulkForm()", context);
+
+const steps = JSON.parse(process.argv[3]);
+const seen = [];
+(async () => {
+    for (const step of steps) {
+        sent = null;
+        if (step.do === "click") {
+            buttons[step.source].fire("click");
+        } else if (step.do === "paste") {
+            els["#pasted_rows"].value = step.text;
+        } else if (step.do === "submit") {
+            form.fire("submit", { preventDefault() {} });
+            await new Promise((resolve) => setImmediate(resolve));
+        } else if (step.do === "lang") {
+            html.lang = step.lang;
+            vm.runInContext("applyLang()", context);
+            const error = els[".form-error"];
+            error.textContent = error.getAttribute("data-" + step.lang) || "";
+        }
+        seen.push({
+            error: els[".form-error"].textContent,
+            pressed: buttons.paste.getAttribute("aria-pressed"),
+            pasteShown: !panels.paste.hidden,
+            fileShown: !panels.file.hidden,
+            focused: focused ? focused.getAttribute("id") : null,
+            sent,
+        });
+    }
+    process.stdout.write(JSON.stringify(seen));
+})().catch((error) => { console.error(error); process.exit(1); });
+"""
+
 NODE = shutil.which("node")
 needs_node = pytest.mark.skipif(NODE is None, reason="Node is not on PATH")
 
@@ -161,6 +270,16 @@ def _drive(tmp_path, lang, steps):
     harness.write_text(_HARNESS, encoding="utf-8")
     result = subprocess.run(
         [NODE, str(harness), str(_APP_JS), lang, json.dumps(steps)],
+        capture_output=True, text=True, encoding="utf-8", check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def _drive_bulk(tmp_path, steps):
+    harness = tmp_path / "bulk_harness.js"
+    harness.write_text(_BULK_HARNESS, encoding="utf-8")
+    result = subprocess.run(
+        [NODE, str(harness), str(_APP_JS), json.dumps(steps)],
         capture_output=True, text=True, encoding="utf-8", check=True,
     )
     return json.loads(result.stdout)
@@ -255,4 +374,35 @@ def test_the_pause_countdown_names_the_service(tmp_path, service, countdown):
     assert seen[0]["countdown"] == countdown
     # After the wait the running state is back.
     assert seen[1]["state"] == "Searching…"
+
+
+
+@needs_node
+def test_the_paste_switch_shows_the_box_and_sends_only_the_rows(tmp_path):
+    seen = _drive_bulk(tmp_path, [
+        {"do": "submit"},
+        {"do": "click", "source": "paste"},
+        {"do": "submit"},
+        {"do": "lang", "lang": "cs"},
+        {"do": "paste", "text": "Alfa a.s.\t\tCZ\r\n"},
+        {"do": "submit"},
+        {"do": "click", "source": "file"},
+    ])
+    # Nothing chosen yet: the file panel asks for a file.
+    assert seen[0]["error"] == "Please select a file first"
+    assert seen[0]["sent"] is None
+    # The switch shows the paste box, ready for Ctrl+V.
+    assert seen[1]["pressed"] == "true"
+    assert seen[1]["pasteShown"] and not seen[1]["fileShown"]
+    assert seen[1]["focused"] == "pasted_rows"
+    assert seen[1]["error"] == ""
+    # An empty box is not sent, and its message follows a CZ switch.
+    assert seen[2]["error"] == "Please paste the rows first"
+    assert seen[2]["sent"] is None
+    assert seen[3]["error"] == "Nejprve vložte řádky"
+    # Pasted rows go out as they are, without a file.
+    assert seen[5]["sent"] == {"mode": "paste", "rows": "Alfa a.s.\t\tCZ\r\n"}
+    assert seen[5]["error"] == ""
+    assert seen[6]["fileShown"] and not seen[6]["pasteShown"]
+    assert seen[6]["pressed"] == "false"
 

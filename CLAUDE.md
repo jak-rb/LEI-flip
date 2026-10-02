@@ -106,7 +106,7 @@ LEI lookup is a small web tool for finding a company's Legal Entity Identifier
 (LEI) in the [GLEIF](https://www.gleif.org/) database. A user can either run a
 single lookup (enter an entity name or an ISIN, optionally with address fields
 to narrow the result) or a bulk lookup by uploading an `.xlsx`, `.csv`, `.tsv`
-or `.txt` file of entities.
+or `.txt` file of entities, or by pasting a few rows copied from Excel.
 
 It is a lean rebuild based on the core of the original LEI lookup tool created
 by Jakub Schrimpel: the precision-first matcher and GLEIF/ISIN resolution are
@@ -170,14 +170,14 @@ core/              # backend lookup logic (ported + simplified from the original
   openfigi.py      # OpenFIGI client: ISIN -> issuer name(s) (ISIN fallback)
   storage.py       # search store: one `searches` table on Postgres or SQLite
   export.py        # build CSV / Excel from a search (reflects manual decisions)
-  upload.py        # parse an uploaded .xlsx/.csv/.tsv/.txt into entities
+  upload.py        # parse an uploaded .xlsx/.csv/.tsv/.txt, or pasted rows, into entities
 data/              # read-only lookup tables (committed)
   country_mapping.json  # country name (cs/en/native) -> ISO alpha-2 code
   country_alpha3.json   # ISO alpha-3 code -> alpha-2 code ("DEU" -> "DE")
   legal_forms.txt       # legal-form suffixes stripped before name matching
 templates/         # Jinja2 templates
   base.html        # shared layout (header, Help/Report-bugs dialogs, page shell)
-  index.html       # single + bulk lookup forms (submit creates a job, goes to /results)
+  index.html       # single + bulk lookup forms, bulk = file or pasted rows (submit creates a job)
   results.html     # /results: summary card (live while running), stepper, tables
   admin.html       # hidden /admin page: the searches table, 5 rows a page (no auth)
 public/            # static files, served by Vercel's CDN at the site root
@@ -209,6 +209,34 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    `core/storage.create_search`. Nothing is looked up yet. Unusable input
    returns 400 with an `error` message the search page shows next to its
    Search button (this replaced the separate pre-flight endpoint).
+   Pasted rows (the bulk card's File / Paste rows switch; `mode=paste`,
+   form field `rows`, stored with mode "paste") go through
+   `core/upload.parse_pasted_rows` and the same header, cap and length
+   rules: text with a tab is read like a `.tsv`, by position (an empty
+   ISIN cell keeps its place); with no tab, semicolon lines when every
+   line holds one, else line by line (`_spaced_cells`), for rows whose
+   tabs an e-mail turned into spaces (columns 2+ spaces apart). A name
+   may hold a doubled space too, and a name cut short can match its
+   parent ("Bank of America  NA" -> "Bank of America"), so the name
+   ends only at a sure boundary and is joined with single spaces: a
+   country after a gap of 4+ spaces (an empty ISIN cell's trace), a
+   valid ISIN written as one word (not after a country code: a Slovak
+   VAT number passes the ISIN check), or a placeholder (an Excel error
+   value, "#" and a letter, so not a fund's "#2"; N/A, NULL, 0, -)
+   before a country, unless a wide gap follows. Failing those,
+   and only with no wide gap, an uppercase two-letter code right after
+   the first value is the country (not a legal form or "NA"). Any other
+   line is one value, the name: a lost match, never a wrong one. A valid
+   ISIN alone is an ISIN-only row; a row whose street lands in the
+   postal code (a doubled space in its city) keeps only name and
+   country rather than refusing the paste; semicolon lines are not
+   taken when a line has a wide gap; an Excel-quoted multi-line cell
+   in a paste without tabs splits in two (accepted). `country_to_iso` costs
+   about 1 ms on a miss, so it is only reached for lines with a name,
+   which the 101-entity cap bounds. Three adversarial rounds
+   (2026-10-01) shaped these rules; `tests/test_paste.py` holds their
+   cases. The same rounds found `_LABEL_NOTE` quadratic on many "("
+   (4 MB in a header cell took hours): now `\([^()]*\)`.
    Upload rules: blank rows (also cells of only whitespace or invisible
    format characters, `core.models.is_blank`) are skipped, and the first
    non-blank row is dropped when it holds column labels (Name/ISIN/Země/PSČ,

@@ -135,6 +135,11 @@ def _load_legal_forms() -> list[str]:
     return _LEGAL_FORMS
 
 
+def is_legal_form(text: str) -> bool:
+    """Whether a text is one of the legal forms, such as "SE" or "a.s."."""
+    return " ".join(text.lower().split()) in _load_legal_forms()
+
+
 def country_to_iso(country_name: Optional[str]) -> Optional[str]:
     """Convert a country name to an ISO 3166-1 alpha-2 code.
 
