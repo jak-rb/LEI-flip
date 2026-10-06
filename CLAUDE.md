@@ -406,7 +406,11 @@ page shows lookup notes in both languages (`core/notes.czech_note`), and each
 matched row flags a non-ISSUED LEI status and its warnings (all but
 `CHECK_FAILED`, which only means a missing street or ZIP), both languages,
 from the template's `flag_labels`; a match through the ISIN also shows its
-note there, saying how it was made. The overall percent shown
+note there, saying how it was made, and a GLEIF street "c/o" an agent (for
+many US companies GLEIF has only their registered agent's office, CSC's in
+Wilmington for FIRY INC) gets the page's own "Agent's address (c/o)" flag
+(`app._display_flags`), as a searched address rarely matches it. The overall
+percent shown
 per candidate is display-only (`core/lookup._overall_match`) and never gates
 a match.
 

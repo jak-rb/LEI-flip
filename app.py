@@ -12,6 +12,7 @@ and a page refresh mid-search resumes where it left off.
 
 import logging
 import math
+import re
 import secrets
 import time
 
@@ -671,6 +672,23 @@ def download_excel():
     )
 
 
+#: "c/o" (care of) in a GLEIF street: the office of an agent, such as a
+#: registered agent (CSC in Wilmington for many US companies), not the
+#: entity's own, so a searched address rarely matches it.
+_CARE_OF = re.compile(r"\bc/o\b", re.IGNORECASE)
+
+
+def _display_flags(warnings: list, street: str | None) -> list:
+    """A matched row's flags: its warnings, plus AGENT_ADDRESS if "c/o".
+
+    AGENT_ADDRESS is the results page's own flag, not a lookup warning:
+    the downloads show the "c/o" in the GLEIF address itself.
+    """
+    if street and _CARE_OF.search(street):
+        return [*warnings, "AGENT_ADDRESS"]
+    return warnings
+
+
 def _candidate_by_lei(closest: list, lei) -> dict | None:
     """The stored candidate with this LEI, or None if absent."""
     for candidate in closest:
@@ -724,7 +742,10 @@ def _partition(results: list) -> dict:
                 "overall": match.get("confidence"),
                 "lei": algo_lei,
                 "status": match.get("lei_status"),
-                "warnings": match.get("warnings") or [],
+                "warnings": _display_flags(
+                    match.get("warnings") or [],
+                    match.get("gleif_legal_street"),
+                ),
                 # How a match through the ISIN was made. A full match
                 # needs no note: the row shows the legal address.
                 "notes": (
@@ -744,7 +765,7 @@ def _partition(results: list) -> dict:
                     "overall": candidate.get("overall"),
                     "lei": candidate.get("lei"),
                     "status": candidate.get("status"),
-                    "warnings": [],
+                    "warnings": _display_flags([], candidate.get("street")),
                     "notes": None,
                 })
 

@@ -820,8 +820,10 @@ def _firy_lookup(monkeypatch):
     firy = GleifCandidate(
         lei=FIRY_LEI, legal_name="FIRY INC.", status="ISSUED",
         legal_address=GleifAddress(
-            country="US", city="Wilmington", postal_code="19808",
-            address_lines=["251 Little Falls Drive"],
+            country="US", city="WILMINGTON", postal_code="19808",
+            address_lines=[
+                "c/o CORPORATION SERVICE COMPANY", "251 LITTLE FALLS DRIVE",
+            ],
         ),
     )
     entity = InputEntity(
@@ -898,7 +900,8 @@ def test_matched_rows_say_how_an_isin_match_was_made(monkeypatch):
         "matching."
     )
     assert _matched_rows(page.get_data(as_text=True)) == [
-        (["ISIN via OpenFIGI", "Address not verified"],
+        (["ISIN via OpenFIGI", "Address not verified",
+          "Agent's address (c/o)"],
          (FIRY_NOTE, FIRY_NOTE_CS)),
         # GLEIF itself ties this ISIN to the LEI.
         (["Matched by ISIN", "Address not verified", "Country not checked"],
@@ -906,6 +909,40 @@ def test_matched_rows_say_how_an_isin_match_was_made(monkeypatch):
         # A full match needs no note: the row shows the legal address.
         ([], None),
     ]
+
+
+def test_an_agents_c_o_address_is_flagged():
+    # GLEIF gives many US companies only the office of their registered
+    # agent ("c/o CORPORATION SERVICE COMPANY" in Wilmington for FIRY
+    # INC), which a searched address rarely matches.
+    def full_match(lei, street):
+        return LookupResult(
+            lei=lei, lei_status="ISSUED", match_type=MatchType.FULL_MATCH,
+            gleif_legal_name="Acme Inc.", gleif_legal_street=street,
+        )
+
+    agent = CandidateSummary(
+        legal_name="Acme Trust", lei=REVIEW_LEI, status="ISSUED",
+        street="C/O The Corporation Trust Company, 1209 Orange Street",
+    )
+    entity = InputEntity(name="Acme")
+    job_id = _stored_job([
+        (entity, full_match(
+            "A" * 20, "c/o CORPORATION SERVICE COMPANY, 251 LITTLE FALLS "
+            "DRIVE",
+        ), []),
+        (entity, full_match("B" * 20, "Disc/Old Road 5"), []),
+        (entity, LookupResult(), [agent]),
+    ])
+    # A manually confirmed candidate shows the flag too.
+    assert storage.record_decision(job_id, 2, REVIEW_LEI)
+
+    page = app_module.app.test_client().get(f"/results?job={job_id}")
+    rows = _matched_rows(page.get_data(as_text=True))
+    assert [flags for flags, _ in rows] == [
+        ["Agent's address (c/o)"], [], ["Agent's address (c/o)"],
+    ]
+    assert 'data-cs="Adresa zástupce (c/o)"' in page.get_data(as_text=True)
 
 
 def test_the_export_names_a_match_made_through_openfigi(monkeypatch):

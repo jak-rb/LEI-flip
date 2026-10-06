@@ -218,7 +218,9 @@
        CHECK_FAILED (a missing street or ZIP, on most rows) and
        LAPSED_STATUS (the status flag says it); the CSV/Excel export
        carries them all. A match through the ISIN also shows its note,
-       which says how it was made and so where to check it. #}
+       which says how it was made and so where to check it, and a
+       "c/o" street gets the page's own AGENT_ADDRESS flag
+       (app._display_flags). #}
     {% set hidden_flags = ['LAPSED_STATUS', 'CHECK_FAILED'] %}
     {% set flag_labels = {
         'AMBIGUOUS_MATCH': ('Several similar LEIs', 'Více podobných LEI'),
@@ -231,6 +233,7 @@
         'COUNTRY_UNVERIFIED': ('Country not checked', 'Země neověřena'),
         'COUNTRY_MISMATCH': ('Country differs', 'Země nesouhlasí'),
         'SINGLE_CANDIDATE_HEURISTIC': ('Single strong name hit', 'Jediná silná shoda názvu'),
+        'AGENT_ADDRESS': ("Agent's address (c/o)", 'Adresa zástupce (c/o)'),
     } %}
     <h3 class="zone-title zone-matched" data-cs="Spárované záznamy" data-en="Matched records">Matched records</h3>
     {% if groups.matched %}
