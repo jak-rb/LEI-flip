@@ -449,7 +449,8 @@ street and ZIP agreement, `core/lookup._street_zip_score`, stored as
 `CandidateSummary.address_score`), its LEI status, a GLEIF link and
 **Accept** (was "Correct match", which read as a verdict). The street and
 the overall percent are gone from the table (the overall still orders
-the candidates). A candidate whose LEI is not ISSUED shows a red "!"
+the candidates), and the matched-records table shows no overall percent
+either (the confidence stays in the downloads). A candidate whose LEI is not ISSUED shows a red "!"
 status and "View only" instead of Accept, and `record_decision` refuses
 it; a row is "to validate" only with a candidate it may accept
 (`core.models.has_acceptable_candidate`), so a row whose candidates are

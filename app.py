@@ -816,7 +816,6 @@ def _partition(results: list) -> dict:
                 "country": match.get("gleif_legal_country"),
                 "city": match.get("gleif_legal_city"),
                 "street": match.get("gleif_legal_street"),
-                "overall": match.get("confidence"),
                 "lei": algo_lei,
                 "status": match.get("lei_status"),
                 "warnings": _display_flags(
@@ -839,7 +838,6 @@ def _partition(results: list) -> dict:
                     "country": candidate.get("country"),
                     "city": candidate.get("city"),
                     "street": candidate.get("street"),
-                    "overall": candidate.get("overall"),
                     "lei": candidate.get("lei"),
                     "status": candidate.get("status"),
                     "warnings": _display_flags([], candidate.get("street")),

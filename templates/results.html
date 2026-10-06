@@ -279,7 +279,6 @@
                     <th data-cs="Město" data-en="City">City</th>
                     <th data-cs="Ulice" data-en="Street">Street</th>
                     <th>GLEIF</th>
-                    <th data-cs="Celková shoda" data-en="Overall match">Overall match</th>
                 </tr>
             </thead>
             <tbody>
@@ -318,11 +317,6 @@
                            href="https://search.gleif.org/#/record/{{ m.lei }}"
                            target="_blank" rel="noopener"
                            data-cs="Zobrazit ↗" data-en="View ↗">View &#8599;</a>
-                    </td>
-                    <td>
-                        {% if m.overall is not none %}
-                        {{ m.overall|round|int }}%
-                        {% else %}-{% endif %}
                     </td>
                 </tr>
                 {% endfor %}

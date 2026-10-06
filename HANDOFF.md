@@ -33,7 +33,8 @@ commit (see `git log`):
   too), a note says why the row was not matched, and the table shows
   name / city / address scores (green, red, or a dash) and the LEI status
   instead of the street and the overall percent; "Correct match" is now
-  "Accept".
+  "Accept". The matched-records table lost its overall percent too
+  (follow-up commit, at the user's request).
 
 Checks: 846 tests; offline replay identical to its expectation (only junk
 review candidates dropped); a live replay of the 62 real ISIN rows (the
@@ -67,13 +68,6 @@ For the user:
   are searched again or expire (by 2026-11-05); only decisions on stopped
   candidates are ignored on the page and in the downloads. Reviewers
   should search their test files again.
-- The reviewers asked whether the tool could look an issuer's address up
-  on the web (from the OpenFIGI name) to check it: that needs an LLM or a
-  web-search service, which they understood is not possible in CodeNOW.
-  OpenFIGI itself gives no addresses.
-- The matched-records table still shows the overall percent (the
-  confidence). The reviewers dropped it from the candidate table only;
-  ask whether it should go there too.
 
 Candidates for a next session:
 1. Recall on real ISIN rows: now 9 of the 62 are matched, 21 go to review

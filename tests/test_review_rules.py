@@ -588,6 +588,19 @@ def test_the_candidate_table_shows_scores_and_status_not_overall():
     assert 'class="lei-status lei-status-ok">ISSUED<' in table
 
 
+def test_the_matched_table_shows_no_overall_percent():
+    # Reviewers cannot go by it; dropped from both tables (2026-10-06).
+    entity = InputEntity(name="Alpha Holding a.s.", town="Praha")
+    page = _page(_lookup_job(
+        (entity, _CannedGleif([_candidate("Alpha Holding a.s.", "A" * 20)])),
+    ))
+    table = page.split('class="results-table table-matched"', 1)[1]
+    table = table.split("</table>", 1)[0]
+    assert 'href="https://search.gleif.org/#/record/' + "A" * 20 in table
+    for text in ("Overall match", "Celková shoda", "%"):
+        assert text not in table
+
+
 def test_a_score_with_nothing_to_compare_shows_a_dash():
     entity = InputEntity(name="Alpha Holding a.s.")
     near = _candidate("Alpha Holding a.s.", "A" * 20, city="Brno")
