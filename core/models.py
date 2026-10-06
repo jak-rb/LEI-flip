@@ -86,6 +86,51 @@ def has_acceptable_candidate(closest: list) -> bool:
     return any(is_issued(candidate.get("status")) for candidate in closest)
 
 
+def stopped_note(closest: list) -> Optional[str]:
+    """The note of a row whose every candidate is stopped by its status.
+
+    Such a row has nothing to accept, so it is a no-match; its note
+    names the records and their statuses, which are only to be seen.
+    They are the closest records, not the entity: the note claims no
+    more (a full match on a stopped LEI has a note of its own).
+
+    Args:
+        closest: The row's candidates (dicts).
+
+    Returns:
+        The note, or None when there is no candidate or one may be
+        accepted.
+    """
+    if not closest or has_acceptable_candidate(closest):
+        return None
+    listed = "; ".join(
+        f"{record.get('legal_name')} (LEI {record.get('lei')}, "
+        f"{record.get('status')})"
+        for record in closest
+    )
+    return (
+        f"No usable LEI found in GLEIF. The closest records cannot be "
+        f"used: {listed}."
+    )
+
+
+def shown_note(row: dict) -> str:
+    """A stored row's lookup note, as the page and the downloads show it.
+
+    A row with no match whose candidates are all stopped gets the note
+    naming them (see stopped_note), unless its note is about a stopped
+    record already (the match carries a status that is not ISSUED):
+    rows stored before 2026-10-06, and plain notes such as "No LEI
+    found", would otherwise hide them.
+    """
+    match = row.get("match") or {}
+    note = match.get("notes") or ""
+    status = match.get("lei_status")
+    if match.get("lei") or (status and not is_issued(status)):
+        return note
+    return stopped_note(row.get("closest") or []) or note
+
+
 def standing_decision(row: dict) -> dict:
     """A stored row's manual decision while it still stands, else {}.
 

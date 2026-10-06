@@ -38,6 +38,7 @@ from .models import (
     MatchType,
     WarningCode,
     is_issued,
+    stopped_note,
 )
 from .openfigi import resolve_isin_to_names
 
@@ -67,8 +68,8 @@ OVERALL_ADDRESS_WEIGHT = 0.4
 #: The matcher's weights of street and ZIP in an address score (see
 #: core/matcher.address_match_score), reused for the review table's
 #: "Address" score.
-_STREET_WEIGHT = 0.35
-_ZIP_WEIGHT = 0.25
+STREET_WEIGHT = 0.35
+ZIP_WEIGHT = 0.25
 
 
 def _overall_match(name_score: float, address_score: float) -> float:
@@ -96,9 +97,9 @@ def _street_zip_score(
     """
     parts = []
     if entity.street and address and address.address_lines:
-        parts.append((details.get("street_score", 0), _STREET_WEIGHT))
+        parts.append((details.get("street_score", 0), STREET_WEIGHT))
     if entity.zip_code and address and address.postal_code:
-        parts.append((details.get("zip_score", 0), _ZIP_WEIGHT))
+        parts.append((details.get("zip_score", 0), ZIP_WEIGHT))
     if not parts:
         return None
     total = sum(weight for _, weight in parts)
@@ -178,7 +179,33 @@ def lookup_entity(
         "Looking up: %s (country: %s, ISIN: %s)",
         entity.name, entity.country, entity.isin,
     )
+    result, closest = _lookup(entity, client)
+    return _name_stopped_records(result, closest), closest
 
+
+def _name_stopped_records(
+    result: LookupResult, closest: list[CandidateSummary]
+) -> LookupResult:
+    """Name the records of a no-match whose candidates are all stopped.
+
+    Its plain note ("No LEI found", "manual review is needed", "listed
+    for review") would hide them: the row has nothing to accept, so the
+    page files it as a no-match and shows only its note (see
+    core.models.stopped_note). A note about a stopped record already
+    (the result carries a status that is not ISSUED) is kept.
+    """
+    if result.lei or (result.lei_status and not is_issued(result.lei_status)):
+        return result
+    note = stopped_note([candidate.model_dump() for candidate in closest])
+    if note is not None:
+        result.notes = note
+    return result
+
+
+def _lookup(
+    entity: InputEntity, client: GleifClient
+) -> tuple[LookupResult, list[CandidateSummary]]:
+    """The pipeline of lookup_entity, before stopped records are named."""
     # ISIN-only input: with no name to search or score by, resolve the
     # LEI authoritatively from the ISIN; when GLEIF's mapping has no
     # record of it, fall back to a softer OpenFIGI review (both below).
@@ -376,15 +403,27 @@ def _finalize_full_match(
 ) -> Optional[LookupResult]:
     """Pick the full match to assert, flag ambiguity, log, return it.
 
-    Only an ISSUED LEI is asserted (see core.models.is_issued): None
-    when every full match is stopped by its status.
+    Only an ISSUED LEI within AMBIGUITY_CONFIDENCE_DELTA of the best
+    full match is asserted (see core.models.is_issued): None when there
+    is none, as every full match near the top is stopped by its status.
     """
-    usable = [match for match in full_matches if is_issued(match.lei_status)]
+    # Only the matches within a small band of the best are in the
+    # running: a clean match on a stopped LEI must not hand the match to
+    # a far worse ISSUED one (say, one whose street and ZIP contradict
+    # the input). Of those, the highest ISSUED confidence wins, the first
+    # one GLEIF listed on a tie; a dead twin (a DUPLICATE, or an old
+    # RETIRED LEI next to a re-registration) scores the same on name and
+    # address, and is never chosen.
+    if not full_matches:
+        return None
+    top = max(match.confidence for match in full_matches)
+    usable = [
+        match for match in full_matches
+        if is_issued(match.lei_status)
+        and match.confidence >= top - AMBIGUITY_CONFIDENCE_DELTA
+    ]
     if not usable:
         return None
-    # The highest confidence, the first one GLEIF listed on a tie. A dead
-    # twin (a DUPLICATE, or an old RETIRED LEI next to a re-registration)
-    # scores the same on name and address, and is never chosen.
     result = max(usable, key=lambda match: match.confidence)
     # If another DISTINCT LEI cleared the gate within a small band of
     # the winner (or above it, stopped by its status), we may be
@@ -447,7 +486,7 @@ def _hq_only_no_match(
     )
     status = candidate.status
     status_note = ""
-    if status and status.upper() in LAPSED_STATUSES:
+    if status and not is_issued(status):
         status_note = f" LEI status: {status}."
 
     result = LookupResult(

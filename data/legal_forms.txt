@@ -9,6 +9,21 @@ spol. s.r.o.
 k. s.
 v. o. s.
 společnost s ručením omezeným
+kom. spol.
+komanditní společnost
+komanditni spolecnost
+veřejná obchodní společnost
+verejna obchodni spolecnost
+akciová spoločnosť
+akciova spolocnost
+spoločnosť s ručením obmedzeným
+spolocnost s rucenim obmedzenym
+zrt.
+zrt
+nyrt.
+nyrt
+jsc
+pjsc
 plc
 plc.
 ltd

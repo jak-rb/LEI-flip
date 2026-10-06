@@ -54,6 +54,17 @@ _SERIAL_WORDS = frozenset({
 })
 
 
+#: Letter runs that are legal designations the legal-form list does not
+#: strip (it would strip them from every name): "N.A." (a US national
+#: bank), "S.C.A.", "S.C.S.", "L.P.", "S.A.B. de C.V." and the Slovak
+#: pension company types "d.s.s." and "d.d.s.". In mid-name they are
+#: noise like the rest of the legal form, not initials. (The Slovak fund
+#: types a.d.f. / i.d.f. / d.d.f. do tell funds apart, so stay tokens.)
+_LEGAL_FORM_INITIALS = frozenset({
+    "na", "sca", "scs", "scsp", "lp", "sab", "cv", "dss", "dds",
+})
+
+
 def _is_letter(word: str) -> bool:
     """Whether a word is a single letter, as initials leave them."""
     return len(word) == 1 and word.isalpha()
@@ -80,6 +91,7 @@ def _initials_run(words: list[str], start: int) -> tuple[int, bool]:
     )
     initials = not (
         len(letters) < 2 or trailing
+        or "".join(letters) in _LEGAL_FORM_INITIALS
         or is_legal_form("".join(letters))
         or is_legal_form(".".join(letters) + ".")
     )
@@ -138,6 +150,11 @@ def _after_serial(previous: str) -> bool:
 
 def _token_covered(token: str, others: list[str]) -> bool:
     """Whether ``token`` has a fuzzy counterpart among ``others``."""
+    # A short token, such as joined initials, needs its exact twin: at
+    # three letters one more is still 85.7 alike, and "A.B.C." is not
+    # "ABCD".
+    if len(token) <= 3:
+        return token in others
     return any(
         fuzz.ratio(token, o) >= _TOKEN_COVER_THRESHOLD for o in others
     )
@@ -228,22 +245,27 @@ def shares_name_word(input_name: str, candidate: GleifCandidate) -> bool:
 
     A candidate whose name agrees only in its legal form ("FISS, spol.
     s r.o." and "BRŮZA spol. s r.o.") or in connectives is no near-miss
-    at all, so the review offers only candidates that pass this. An
-    input with no distinctive word left (only a legal form) passes
-    everything, as before.
+    at all, so the review offers only candidates that pass this. A name
+    that clears the name gate always passes, though its words may be
+    split otherwise ("Raiffeisen Bank" / "Raiffeisenbank"); and an input
+    with no distinctive word left (only a legal form) passes everything,
+    as before.
 
     Args:
         input_name: The user-provided entity name.
         candidate: A GLEIF candidate record.
 
     Returns:
-        True if a significant token of the input has a fuzzy
-        counterpart among those of the candidate's legal or other names.
+        True if one of the candidate's legal or other names clears the
+        name gate, or has a fuzzy counterpart of a significant token of
+        the input.
     """
     wanted = _significant_tokens(normalize_name(input_name))
     if not wanted:
         return True
     for name in (candidate.legal_name, *candidate.other_names):
+        if name_similarity(input_name, name) >= NAME_MATCH_THRESHOLD:
+            return True
         tokens = _significant_tokens(normalize_name(name))
         if any(_token_covered(token, tokens) for token in wanted):
             return True

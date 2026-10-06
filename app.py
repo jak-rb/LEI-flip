@@ -42,7 +42,12 @@ from core.gleif import (
     GleifRateLimited,
     GleifServerError,
 )
-from core.lookup import NOT_FOUND_NOTE, lookup_entity
+from core.lookup import (
+    STREET_WEIGHT,
+    ZIP_WEIGHT,
+    NOT_FOUND_NOTE,
+    lookup_entity,
+)
 from core.models import (
     InputEntity,
     InputError,
@@ -51,6 +56,7 @@ from core.models import (
     has_acceptable_candidate,
     is_blank,
     is_issued,
+    shown_note,
     standing_decision,
 )
 from core.notes import czech_note
@@ -712,11 +718,34 @@ def _shown_score(value, comparable: bool) -> dict:
     """A score as the stepper shows it: its value and pass / fail / na.
 
     "na" (shown as a dash) when there is nothing to compare, which
-    differs from a disagreement.
+    differs from a disagreement. The value is cut to a whole number,
+    not rounded: the colour follows the matcher's gate on the exact
+    score, so 74.6 must not read as a red 75.
     """
     if not comparable or not isinstance(value, (int, float)):
         return {"value": None, "state": "na"}
-    return {"value": round(value), "state": value}
+    return {"value": math.floor(value), "state": value}
+
+
+def _stored_address_score(source: dict, candidate: dict):
+    """A candidate's address score; rebuilt for one stored without it.
+
+    Candidates stored before 2026-10-06 have no ``address_score``: it is
+    rebuilt from their street and ZIP scores, over the fields the
+    searched row gave, with the weights of core/lookup._street_zip_score
+    (whether GLEIF had a ZIP was not stored, so it may read low).
+    """
+    if "address_score" in candidate:
+        return candidate["address_score"]
+    parts = []
+    if (source.get("street") or "").strip():
+        parts.append((candidate.get("street_score") or 0, STREET_WEIGHT))
+    if (source.get("postal_code") or "").strip():
+        parts.append((candidate.get("zip_score") or 0, ZIP_WEIGHT))
+    if not parts:
+        return None
+    total = sum(weight for _, weight in parts)
+    return sum(score * weight for score, weight in parts) / total
 
 
 def _review_candidate(source: dict, candidate: dict) -> dict:
@@ -736,8 +765,8 @@ def _review_candidate(source: dict, candidate: dict) -> dict:
             bool((source.get("city") or "").strip() and candidate.get("city")),
         ),
         "address": _shown_score(
-            candidate.get("address_score"),
-            candidate.get("address_score") is not None,
+            _stored_address_score(source, candidate),
+            _stored_address_score(source, candidate) is not None,
         ),
     }
     for kind, score in scores.items():
@@ -851,7 +880,7 @@ def _partition(results: list) -> dict:
                 "searched": source.get("name") or source.get("isin"),
                 "country": source.get("country"),
                 "city": source.get("city"),
-                "notes": match.get("notes"),
+                "notes": shown_note(row),
             })
 
     done = sum(1 for record in to_validate if record["decision"])

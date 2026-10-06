@@ -135,6 +135,13 @@ def _exported(job_id):
     "FISS, spol. s r.o.", "FISS spol. s r.o.", "FISS, spol. s r. o.",
     "FISS spol.s r.o.", "FISS, spol. s.r.o.", "FISS, s.r.o.",
     "FISS, společnost s ručením omezeným", "FISS, a. s.", "FISS k. s.",
+    # However a bank export drops the dots and spaces (review finding).
+    "FISS SPOL S R O", "FISS spol s r o", "FISS spol. s r.o",
+    "FISS spol.s.r.o.", "FISS spol. s. r. o.", "FISS spol s.r.o.",
+    # Spelled-out Czech and Slovak forms, and Hungarian ones.
+    "FISS, komanditní společnost", "FISS, veřejná obchodní společnost",
+    "FISS, akciová spoločnosť", "FISS, spoločnosť s ručením obmedzeným",
+    "FISS Zrt.", "FISS Nyrt.",
 ])
 def test_czech_legal_forms_are_stripped(name):
     assert normalize_name(name) == "fiss"
@@ -164,6 +171,12 @@ def test_a_shared_legal_form_adds_nothing_to_a_name_score(other):
     ("Euro-Holdings Ltd", "EURO F.D. HOLDINGS S.A."),
     ("Morgan", "J.P. Morgan"),
     ("Holdings Ltd", "C.D. Holdings Ltd"),
+    # Three joined initials are no four-letter acronym (review finding).
+    ("A.B.C. Trading", "ABCD Trading"),
+    ("ABC Trading", "ABCD Trading"),
+    # Fund types of one company still tell its funds apart.
+    ("Indexovy negarantovany a.d.f. UNIQA",
+     "Indexovy negarantovany i.d.f. UNIQA"),
 ])
 def test_initials_tell_names_apart(searched, other):
     assert name_similarity(searched, other) < NAME_MATCH_THRESHOLD
@@ -180,6 +193,16 @@ def test_initials_tell_names_apart(searched, other):
     ("J&T Dividend Fund", "J&T SICAV P.L.C. - J&T Dividend Fund"),
     ("AT&T Inc.", "AT&T INC."),
     ("ČEZ, a. s.", "ČEZ"),
+    # Spaced initials keep their last letters (review finding).
+    ("J.K.S. Group", "J. K. S. Group"),
+    ("H.A.S. spol. s r.o.", "H. A. S. spol. s r.o."),
+    # Legal-form letters in mid-name are no initials (review finding).
+    ("Citibank London Branch", "CITIBANK N.A. LONDON BRANCH"),
+    ("NEV Earthfund SICAV-RAIF - Nevhouse 1",
+     "NEV EARTHFUND S.C.A. SICAV-RAIF - NEVHOUSE 1"),
+    # An undotted "spol s r o" still matches GLEIF's (review finding).
+    ("FISS SPOL S R O", "FISS, spol. s r.o."),
+    ("XYZ spol s r o v likvidaci", "XYZ, spol. s r.o. v likvidaci"),
 ])
 def test_initials_and_spacing_of_the_same_name_still_match(searched, other):
     assert name_similarity(searched, other) == 100
@@ -581,10 +604,11 @@ def test_the_candidate_table_shows_scores_and_status_not_overall():
     assert "Correct match" not in page
     # The name (70, capped by "Group") fails; the city passes; the street
     # "Jina 5" scores 44.4 against "Hlavni 1" and the ZIP disagrees, so
-    # the address is (35 * 44.4 + 25 * 0) / 60, about 26: a fail.
+    # the address is (35 * 44.4 + 25 * 0) / 60 = 25.9, shown cut to 25
+    # (a score is never shown rounded up past its gate): a fail.
     cells = re.findall(r'class="col-score score-(\w+)">([^<]*)<', table)
     assert cells[0] == ("fail", "70") and cells[1] == ("pass", "100")
-    assert cells[2] == ("fail", "26")
+    assert cells[2] == ("fail", "25")
     assert 'class="lei-status lei-status-ok">ISSUED<' in table
 
 
@@ -651,4 +675,156 @@ def test_the_address_score_weighs_street_and_zip(street, zip_code, expected):
         entity, _CannedGleif([_candidate("Alpha Holding a.s.", "A" * 20)]),
     )
     assert closest[0].address_score == expected
+
+
+# ---- found by the adversarial review of 2026-10-06 ----
+
+def test_a_name_at_the_gate_is_offered_however_its_words_are_split():
+    # "Raiffeisen Bank" and "Raiffeisenbank" score 100, yet no word of
+    # one covers a word of the other: the candidate must still be
+    # offered, or the note asks for a review of nothing.
+    entity = InputEntity(
+        name="Raiffeisen Bank a.s.", country="CZ", town="Brno",
+    )
+    rb = _candidate("Raiffeisenbank a.s.", "R" * 20)
+    result, closest = lookup_module.lookup_entity(entity, _CannedGleif([rb]))
+    assert result.lei is None and [c.lei for c in closest] == ["R" * 20]
+
+    euro = _candidate(
+        "EuroHoldings Limited", "E" * 20, country="GB", city="London",
+    )
+    _, closest = lookup_module.lookup_entity(
+        InputEntity(name="Euro-Holdings Ltd", country="GB",
+                    town="Birmingham"),
+        _CannedGleif([euro]),
+    )
+    assert [c.lei for c in closest] == ["E" * 20]
+
+
+@pytest.mark.parametrize("status", ["LAPSED", "PENDING_TRANSFER"])
+def test_a_clean_stopped_match_is_not_handed_to_a_contradicted_one(status):
+    # The input's own address is the stopped record's; an ISSUED record
+    # whose street and ZIP both contradict it (capped at 79) is far
+    # below, so it is offered for review, not asserted.
+    entity = InputEntity(
+        name="Alpha Holding a.s.", country="CZ", town="Praha",
+        street="Hlavni 1", zip_code="11000",
+    )
+    clean = _candidate("Alpha Holding a.s.", "A" * 20, status=status)
+    other = _candidate(
+        "Alpha Holding a.s.", "B" * 20, street="Jina 77", zip_code="15000",
+    )
+    result, closest = lookup_module.lookup_entity(
+        entity, _CannedGleif([clean, other]),
+    )
+    assert result.lei is None
+    assert f"its LEI status is {status} - the LEI cannot be used" in (
+        result.notes
+    )
+    assert "B" * 20 in [c.lei for c in closest]
+    page = _page(_stored_job([(entity, result, closest)]))
+    assert _card_counts(page) == {"matched": 0, "validate": 1, "unmatched": 0}
+
+
+def _no_match_row(page):
+    """(English note, Czech note) of the no-match table's only row."""
+    table = page.split('class="results-table table-nomatch"', 1)[1]
+    english, czech = re.search(
+        r'<td data-en="([^"]*)"\s+data-cs="([^"]*)">', table,
+    ).groups()
+    return english, czech
+
+
+def test_a_row_of_only_stopped_records_names_them():
+    # Billington with no address: no full match, and its only record is
+    # LAPSED; "No LEI found" would hide it.
+    entity = InputEntity(name="Billington Holdings PLC", country="GB")
+    result, closest = lookup_module.lookup_entity(
+        entity, _CannedGleif([_billington()]),
+    )
+    # The closest records, not the entity: the note claims no more, and
+    # the result carries none of their details.
+    assert result.notes == (
+        "No usable LEI found in GLEIF. The closest records cannot be "
+        f"used: BILLINGTON HOLDINGS PLC (LEI {'B' * 20}, LAPSED)."
+    )
+    assert (result.lei_status, result.gleif_legal_name) == (None, None)
+    job_id = _stored_job([(entity, result, closest)])
+    english, czech = _no_match_row(_page(job_id))
+    assert english == result.notes
+    assert czech == (
+        "V GLEIF nebylo nalezeno použitelné LEI. Nejbližší záznamy nelze "
+        f"použít: BILLINGTON HOLDINGS PLC (LEI {'B' * 20}, LAPSED)."
+    )
+    assert _exported(job_id)[0]["Notes"] == result.notes
+
+
+def test_an_isin_mapped_only_to_stopped_records_names_them():
+    records = [
+        _candidate("Alpha Holding a.s.", "A" * 20, status="RETIRED"),
+        _candidate("Alpha Holding SE", "D" * 20, status="DUPLICATE"),
+    ]
+    result, _ = lookup_module.lookup_entity(
+        InputEntity(isin="CZ0009010468"), _CannedGleif(by_isin=records),
+    )
+    assert result.notes == (
+        "No usable LEI found in GLEIF. The closest records cannot be "
+        f"used: Alpha Holding a.s. (LEI {'A' * 20}, RETIRED); Alpha "
+        f"Holding SE (LEI {'D' * 20}, DUPLICATE)."
+    )
+
+
+def test_an_older_stored_row_of_stopped_records_names_them_too():
+    # Stored before the rule: a plain note, its one candidate LAPSED.
+    job_id = secrets.token_hex(16)
+    storage.create_search(job_id, "bulk", [{"name": "Foo a.s."}])
+    storage.append_results(job_id, [{
+        "input": {"name": "Foo a.s."},
+        "match": {"lei": None, "notes": "No LEI found in the GLEIF database."},
+        "closest": [{"lei": "F" * 20, "legal_name": "FOO a.s.",
+                     "status": "LAPSED", "overall": 60.0}],
+    }], 0)
+    english, czech = _no_match_row(_page(job_id))
+    assert english == (
+        "No usable LEI found in GLEIF. The closest records cannot be "
+        f"used: FOO a.s. (LEI {'F' * 20}, LAPSED)."
+    )
+    assert "nelze použít" in czech
+    assert _exported(job_id)[0]["Notes"] == english
+
+
+@pytest.mark.usefixtures("_redwire_figi")
+def test_an_openfigi_candidate_with_no_town_is_not_called_a_mismatch():
+    entity = _redwire_entity().model_copy(update={"town": None})
+    result, closest = lookup_module.lookup_entity(
+        entity, _CannedGleif([_redwire()]),
+    )
+    assert result.lei is None and [c.lei for c in closest] == [REDWIRE_LEI]
+    assert "but no town was given to check its address against" in (
+        result.notes
+    )
+
+
+def test_a_score_just_under_its_gate_is_not_shown_as_the_gate():
+    candidate = {"name_score": 74.6, "city_score": 69.7,
+                 "address_score": 54.8, "city": "Praha", "status": "ISSUED"}
+    scores = app_module._review_candidate(
+        {"name": "Alpha", "city": "Praha"}, candidate,
+    )["scores"]
+    assert scores == {
+        "name": {"value": 74, "state": "fail"},
+        "city": {"value": 69, "state": "fail"},
+        "address": {"value": 54, "state": "fail"},
+    }
+
+
+def test_an_older_stored_candidate_gets_its_address_score_back():
+    # Stored before address_score existed: rebuilt from street and ZIP.
+    candidate = {"name_score": 100, "street_score": 100, "zip_score": 100,
+                 "status": "ISSUED"}
+    source = {"name": "Alpha", "street": "Hlavni 1", "postal_code": "11000"}
+    scores = app_module._review_candidate(source, candidate)["scores"]
+    assert scores["address"] == {"value": 100, "state": "pass"}
+    bare = app_module._review_candidate({"name": "Alpha"}, candidate)
+    assert bare["scores"]["address"] == {"value": None, "state": "na"}
 

@@ -15,7 +15,7 @@ from typing import Optional
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
-from .models import standing_decision
+from .models import shown_note, standing_decision
 
 #: Export column headers, in order.
 COLUMNS = [
@@ -144,7 +144,7 @@ def _answer_fields(row: dict) -> dict:
         "gleif_legal_name": match.get("gleif_legal_name"),
         "gleif_legal_address": match.get("gleif_legal_address"),
         "gleif_hq_address": match.get("gleif_hq_address"),
-        "notes": match.get("notes"),
+        "notes": shown_note(row),
     }
 
 

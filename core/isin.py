@@ -466,11 +466,14 @@ def _openfigi_fallback(
         ), [candidate]
     agrees = _address_agrees(entity, candidate)
     if agrees is None:
-        reason = (
-            "its address does not match the one given"
-            if entity.town or entity.street or entity.zip_code
-            else "no address was given to check it against"
-        )
+        # The check needs a town (as a full match does): with only a
+        # street or ZIP given, the note must not call them a mismatch.
+        if not (entity.town or entity.street or entity.zip_code):
+            reason = "no address was given to check it against"
+        elif not entity.town:
+            reason = "no town was given to check its address against"
+        else:
+            reason = "its address does not match the one given"
         logger.info(
             "OpenFIGI candidate %s for %s left for review: address",
             candidate.lei, isin,

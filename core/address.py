@@ -83,6 +83,15 @@ _RE_SHARE_CLASS_WORD = re.compile(
 )
 _RE_TRAILING_PARENS = re.compile(r'\s*\([^)]{1,20}\)\s*$')
 
+# The Czech "spol. s r.o." however its dots and spaces fall ("spol s r
+# o", "spol.s.r.o.", "SPOL. S R.O"): bank exports often drop them, and
+# GLEIF's own spelling is stripped as a legal form, so a name keeping
+# them would no longer match it.
+_RE_SPOL_SRO = re.compile(
+    r'(?:^|(?<=[\s,(]))spol(?:\.\s*|\s+)s\.?\s*r\.?\s*o\.?(?=[\s,)]|$)',
+    re.IGNORECASE,
+)
+
 
 def _load_country_map() -> dict[str, str]:
     """Lazily load and cache the country-name -> ISO map."""
@@ -121,8 +130,16 @@ def _load_legal_forms() -> list[str]:
         # a no-break space copied from a register: the name is not
         # collapsed until after the forms are stripped.
         words = r'\s+'.join(re.escape(word) for word in form.split())
+        # A spaced form of single letters ("a. s.", "v. o. s.") is not
+        # taken right after a lone letter: there it is the end of spaced
+        # initials, as in "J. K. S. Group" or "H. A. S. spol. s r.o.".
+        after_initial = (
+            r'(?<!\s)(?<!\b[^\W\d_])(?<!\b[^\W\d_]\.)'
+            if ' ' in form and re.fullmatch(r'[^\W\d_]\.', form.split()[0])
+            else ''
+        )
         pattern = (
-            r'(?:^|[\s,])\s*' + words
+            r'(?:^|' + after_initial + r'[\s,])\s*' + words
             + r'\s*(?:[,.]?\s*$|(?=[\s,]))'
         )
         patterns.append(re.compile(pattern, re.IGNORECASE))
@@ -245,6 +262,7 @@ def normalize_name(name: str) -> str:
     result = _RE_LONG_WHITESPACE.sub(_shorten_whitespace_run, result)
 
     _load_legal_forms()
+    result = _RE_SPOL_SRO.sub(' ', result)
     for pattern in _LEGAL_FORM_PATTERNS:
         result = pattern.sub(' ', result)
 

@@ -168,11 +168,13 @@ def _real_notes(monkeypatch):
         isin_module, "resolve_isin_to_names", lambda *a, **k: [figi_name],
     )
     in_ostrava = InputEntity(name=name, town="Ostrava", country="CZ")
+    street_only = InputEntity(name=name, street="Legal 1")
     for entity, found, params in (
         (in_brno, _candidate(), [ISIN, figi_name]),
         (in_praha, _candidate(), [ISIN, figi_name]),
         (in_ostrava, _candidate(), [ISIN, figi_name, name]),
         (no_address, _candidate(), [ISIN, figi_name, name]),
+        (street_only, _candidate(), [ISIN, figi_name, name]),
         (in_brno, lapsed, [ISIN, figi_name, name, lei, "LAPSED"]),
     ):
         notes.append((
@@ -185,6 +187,17 @@ def _real_notes(monkeypatch):
         lookup_module, "resolve_isin_to_names", lambda *a, **k: [],
     )
     notes.append((entity_note(isin_only, _CannedGleif()), [ISIN]))
+    # A row whose only candidates are stopped names them, one or more.
+    notes.append((
+        entity_note(no_address, _CannedGleif([lapsed])),
+        [name, lei, "LAPSED"],
+    ))
+    notes.append((
+        entity_note(isin_only, _CannedGleif(
+            by_isin=[retired, bare.model_copy(update={"status": "MERGED"})],
+        )),
+        [name, lei, "RETIRED", "B" * 20, "MERGED"],
+    ))
     monkeypatch.setattr(
         lookup_module, "resolve_isin_to_names", lambda *a, **k: [figi_name],
     )
@@ -214,7 +227,7 @@ def test_every_lookup_note_has_a_czech_version(monkeypatch):
     notes = _real_notes(monkeypatch)
     # Every distinct note text the code has (the LAPSED variant of the
     # HQ-only note adds its status sentence to a note of its own).
-    assert len({note for note, _ in notes}) == 25
+    assert len({note for note, _ in notes}) == 28
 
     untranslated = []
     for note, params in notes:

@@ -36,13 +36,24 @@ commit (see `git log`):
   "Accept". The matched-records table lost its overall percent too
   (follow-up commit, at the user's request).
 
-Checks: 846 tests; offline replay identical to its expectation (only junk
-review candidates dropped); a live replay of the 62 real ISIN rows (the
-59 below plus the e-mail's) changed no LEI and added no match, while 7
-rows left Matched, each for a new rule (Billington, LIPOCINE, Nova
-Minerals: LAPSED; Redwire, FIRY x3: OpenFIGI address). The live run
-also found that skipping stopped records weakened the OpenFIGI
-fallback's ambiguity check ("X-Energy Inc"); they count there again.
+Checks: offline replay identical to its expectation (only junk review
+candidates dropped); a live replay of the 62 real ISIN rows (the 59
+below plus the e-mail's) changed no LEI and added no match, while 7 rows
+left Matched, each for a new rule (Billington, LIPOCINE, Nova Minerals:
+LAPSED; Redwire, FIRY x3: OpenFIGI address). The live run also found
+that skipping stopped records weakened the OpenFIGI fallback's ambiguity
+check ("X-Energy Inc"); they count there again.
+
+Then an adversarial review (5 area reviewers, a skeptic per finding)
+confirmed 17 findings, all fixed in a third commit with a regression
+test each (877 tests; the new tests fail on the code before it). The
+one high: a clean match on a stopped LEI handed the match to a far
+worse ISSUED record (now only full matches near the best compete).
+Others: undotted "spol s r o" spellings, review candidates at the name
+gate dropped when split differently ("Raiffeisen Bank"), rows of only
+stopped records saying "No LEI found" (now "No usable LEI found in
+GLEIF. The closest records cannot be used: ..."), spaced initials,
+mid-name "N.A.", "A.B.C." vs "ABCD", score display and old stored rows.
 
 ## How the morning's last two were checked
 

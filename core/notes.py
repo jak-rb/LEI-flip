@@ -133,6 +133,20 @@ _NOTE_TEMPLATES = [
     ),
     (
         "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}, and "
+        "GLEIF has {name} under that name, but no town was given to check "
+        "its address against - LEI not assigned. Please review.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name} a GLEIF "
+        "pod tímto názvem vede subjekt {name}, k ověření adresy ale nebylo "
+        "zadáno město - LEI nebylo přiřazeno. Zkontrolujte ho prosím.",
+    ),
+    (
+        "No usable LEI found in GLEIF. The closest records cannot be used: "
+        "{records}.",
+        "V GLEIF nebylo nalezeno použitelné LEI. Nejbližší záznamy nelze "
+        "použít: {records}.",
+    ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}, and "
         "GLEIF has {name} under that name, but no address was given to "
         "check it against - LEI not assigned. Please review.",
         "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name} a GLEIF "

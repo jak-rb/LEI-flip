@@ -368,20 +368,33 @@ unrecognised country. **Only an ISSUED LEI is ever asserted**
 PENDING_TRANSFER...) is a stop on every path - the reviewers' rule of
 2026-10-06, "anything other than issued ... is only for looking". A full
 match on such an LEI becomes a NO_MATCH whose note names it and its
-status (`core/lookup._not_usable_no_match`), a live LEI beats its dead
-twin with `AMBIGUOUS_MATCH` (`_finalize_full_match`), and the ISIN paths
-skip stopped records; an ISIN-only search mapped to one, or an OpenFIGI
-best candidate that is one, says so in its note and offers it to be
-seen. A stopped record still counts in the OpenFIGI fallback's
-ambiguity check (the live replay's "X-Energy Inc": a LAPSED twin of an
-Italian "X ENERGY S.R.L." keeps the live one from being asserted).
-Review candidates must share a distinctive word with the searched name
-(`core/matcher.shares_name_word`): a name agreeing only in its legal form
-("FISS, spol. s r.o." / "BRŮZA spol. s r.o.") is no near-miss. A run of
-initials inside a name ("EURO F.D. HOLDINGS") is a distinguishing token,
-while a trailing run or one spelling a legal form ("..., L.P.", "N.A.",
-"P.L.C.") is dropped as before, and names equal but for spacing ("J.P.
-Morgan" / "JPMorgan") score 100 (`core/matcher._initials_run`).
+status (`core/lookup._not_usable_no_match`). Only full matches within
+`AMBIGUITY_CONFIDENCE_DELTA` of the best compete, so a live LEI beats its
+dead twin with `AMBIGUOUS_MATCH`, but a clean match on a stopped LEI is
+not handed to a far worse ISSUED one (`_finalize_full_match`; that one
+goes to review). The ISIN paths skip stopped records; an ISIN-only
+search mapped to one, or an OpenFIGI best candidate that is one, says
+so in its note and offers it to be seen. A stopped record still counts
+in the OpenFIGI fallback's ambiguity check (the live replay's "X-Energy
+Inc": a LAPSED twin of an Italian "X ENERGY S.R.L." keeps the live one
+from being asserted). Any other row whose candidates are all stopped
+says "No usable LEI found in GLEIF. The closest records cannot be used:
+..." with each record's LEI and status (`core.models.stopped_note`,
+applied by `lookup_entity` and, for stored searches, by
+`core.models.shown_note` on the page and in the downloads).
+Review candidates must share a distinctive word with the searched name,
+or clear the name gate (`core/matcher.shares_name_word`): a name
+agreeing only in its legal form ("FISS, spol. s r.o." / "BRŮZA spol. s
+r.o.") is no near-miss. "spol. s r.o." is stripped however its dots and
+spaces fall (`core/address._RE_SPOL_SRO`, as bank exports drop them),
+and a spaced single-letter form ("a. s.") is not stripped right after a
+lone letter, where it ends spaced initials. A run of initials inside a
+name ("EURO F.D. HOLDINGS") is a distinguishing token
+(`core/matcher._initials_run`), while a trailing run or one spelling a
+legal form ("..., L.P.", "N.A.", "P.L.C.", `_LEGAL_FORM_INITIALS`) is
+dropped as before; a token of three letters or fewer is covered only by
+its exact twin ("A.B.C." is not "ABCD"), and names equal but for spacing
+("J.P. Morgan" / "JPMorgan") score 100 (`core/matcher.name_similarity`).
 
 **The store** (`core/storage.py`) is one `searches` table: `job_id`,
 `created_at` (ISO-8601 UTC text), `mode`, `searched` (entities looked up so
