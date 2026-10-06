@@ -2,16 +2,19 @@
 """Tests of the results page UX: Czech notes, decisions, the stepper.
 
 Covers the notes shown in both languages (every note the lookup code
-can write has a Czech version), the "You searched" line, the summary
-card counts returned by /api/decision, the bilingual 404 replies, and
-the stepper's handling of a failed save (driven in Node when it is on
+can write has a Czech version), how a matched row says an ISIN-based
+match was made, the "You searched" line, the summary card counts
+returned by /api/decision, the bilingual 404 replies, and the
+stepper's handling of a failed save (driven in Node when it is on
 PATH). GLEIF and OpenFIGI are faked; nothing touches the network.
 """
 
+import csv
 import html
 import io
 import json
 import re
+import secrets
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,12 +24,14 @@ import pytest
 import app as app_module
 from core import isin as isin_module
 from core import lookup as lookup_module
+from core import storage
 from core.models import (
     CandidateSummary,
     GleifAddress,
     GleifCandidate,
     InputEntity,
     LookupResult,
+    MatchType,
 )
 from core.notes import czech_note
 
@@ -786,6 +791,147 @@ def test_card_state_texts_match_the_template():
         assert f'{key}: "{english}"' in script
         assert f'{key}: "{czech}"' in script
 
+
+# ---- how an ISIN-based match was made (the FIRY INC feedback) ----
+
+FIRY_ISIN = "US83067L2088"
+FIRY_LEI = "5299006JYSCXOG2KD798"
+FIRY_NOTE = (
+    f"ISIN {FIRY_ISIN} resolved via OpenFIGI to the issuer FIRY INC; the "
+    "LEI was found in GLEIF by that name, not by the ISIN."
+)
+FIRY_NOTE_CS = (
+    f"Podle OpenFIGI patří ISIN {FIRY_ISIN} emitentovi FIRY INC; LEI bylo "
+    "v GLEIF nalezeno podle tohoto názvu, ne podle ISIN."
+)
+
+
+def _firy_lookup(monkeypatch):
+    """Look up the row a user reported (2026-10), GLEIF and OpenFIGI faked.
+
+    GLEIF has no record of the ISIN. OpenFIGI names its issuer, also by
+    a former name, and GLEIF knows that name, with its legal address at
+    a Delaware registered agent rather than the address given.
+    """
+    monkeypatch.setattr(
+        isin_module, "resolve_isin_to_names",
+        lambda *a, **k: ["FIRY INC", "SKILLZ INC"],
+    )
+    firy = GleifCandidate(
+        lei=FIRY_LEI, legal_name="FIRY INC.", status="ISSUED",
+        legal_address=GleifAddress(
+            country="US", city="Wilmington", postal_code="19808",
+            address_lines=["251 Little Falls Drive"],
+        ),
+    )
+    entity = InputEntity(
+        name="FIRY INC", isin=FIRY_ISIN, country="US", town="San Francisco",
+        street="1061 Market St,", zip_code="CA 94103",
+    )
+    return entity, *lookup_module.lookup_entity(entity, _CannedGleif([firy]))
+
+
+def _stored_job(rows):
+    """Store a finished search of (entity, result, closest) rows."""
+    job_id = secrets.token_hex(16)
+    storage.create_search(
+        job_id, "bulk",
+        [app_module._entity_input(entity) for entity, _, _ in rows],
+    )
+    storage.append_results(
+        job_id, [app_module._result_row(*row) for row in rows], 0,
+    )
+    return job_id
+
+
+def _matched_rows(page):
+    """(flags in English, note in English and Czech) per matched row."""
+    table = page.split('class="results-table table-matched"', 1)[1]
+    body = table.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    rows = []
+    for row in re.findall(r"<tr>(.*?)</tr>", body, re.DOTALL):
+        flags = re.findall(
+            r'<span class="match-flag"\s+data-en="([^"]*)"', row,
+        )
+        note = re.search(
+            r'<span class="match-note"\s+data-en="([^"]*)"\s+'
+            r'data-cs="([^"]*)">', row,
+        )
+        rows.append((
+            [html.unescape(flag) for flag in flags],
+            note and tuple(html.unescape(part) for part in note.groups()),
+        ))
+    return rows
+
+
+def test_a_match_made_through_openfigi_is_not_called_a_match_by_isin(
+    monkeypatch,
+):
+    # GLEIF has no record of the ISIN, so "Matched by ISIN" sent the user
+    # there to check it in vain: the LEI came from a search by the name
+    # OpenFIGI gave.
+    _, result, _ = _firy_lookup(monkeypatch)
+    assert (result.lei, result.match_type) == (
+        FIRY_LEI, MatchType.ISIN_OPENFIGI_MATCH,
+    )
+    assert result.warnings == ["ISIN_VIA_OPENFIGI", "UNVERIFIED_ADDRESS"]
+    assert result.notes == FIRY_NOTE
+    assert czech_note(result.notes) == FIRY_NOTE_CS
+
+
+def test_matched_rows_say_how_an_isin_match_was_made(monkeypatch):
+    by_gleif = InputEntity(name="Alpha Holding a.s.", isin=ISIN)
+    in_brno = InputEntity(name="Alpha Holding a.s.", town="Brno", country="CZ")
+    job_id = _stored_job([
+        _firy_lookup(monkeypatch),
+        (by_gleif, *lookup_module.lookup_entity(
+            by_gleif, _CannedGleif(by_isin=[_candidate()]),
+        )),
+        (in_brno, *lookup_module.lookup_entity(
+            in_brno, _CannedGleif([_candidate()]),
+        )),
+    ])
+    page = app_module.app.test_client().get(f"/results?job={job_id}")
+
+    gleif_note = (
+        f"ISIN {ISIN} found in GLEIF; LEI assigned despite the address not "
+        "matching."
+    )
+    assert _matched_rows(page.get_data(as_text=True)) == [
+        (["ISIN via OpenFIGI", "Address not verified"],
+         (FIRY_NOTE, FIRY_NOTE_CS)),
+        # GLEIF itself ties this ISIN to the LEI.
+        (["Matched by ISIN", "Address not verified", "Country not checked"],
+         (gleif_note, czech_note(gleif_note))),
+        # A full match needs no note: the row shows the legal address.
+        ([], None),
+    ]
+
+
+def test_the_export_names_a_match_made_through_openfigi(monkeypatch):
+    job_id = _stored_job([_firy_lookup(monkeypatch)])
+    csv_text = app_module.app.test_client().get(
+        f"/download/csv?job={job_id}",
+    ).get_data(as_text=True)
+    header, row = csv.reader(io.StringIO(csv_text[1:]))
+    exported = dict(zip(header, row))
+    assert (exported["LEI"], exported["Match_type"]) == (
+        FIRY_LEI, "ISIN_OPENFIGI_MATCH",
+    )
+    assert exported["Warnings"] == "ISIN_VIA_OPENFIGI; UNVERIFIED_ADDRESS"
+    assert exported["Notes"] == FIRY_NOTE
+
+
+def test_an_older_openfigi_note_still_reads_in_czech():
+    # Searches stored before 2026-10-06 keep this wording for the 30
+    # days a search is kept, and matched rows now show their note.
+    assert czech_note(
+        f"ISIN {FIRY_ISIN} resolved via OpenFIGI (FIRY INC); LEI found in "
+        "GLEIF."
+    ) == (
+        f"ISIN {FIRY_ISIN} byl dohledán přes OpenFIGI (FIRY INC); LEI bylo "
+        "nalezeno v GLEIF."
+    )
 
 
 # ---- live pages are never reused from the HTTP cache ----

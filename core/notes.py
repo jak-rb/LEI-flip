@@ -75,6 +75,14 @@ _NOTE_TEMPLATES = [
         "potvrzuje LEI.",
     ),
     (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}; the "
+        "LEI was found in GLEIF by that name, not by the ISIN.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name}; LEI bylo "
+        "v GLEIF nalezeno podle tohoto názvu, ne podle ISIN.",
+    ),
+    # The same note as written until 2026-10-06, which the searches
+    # stored by then keep; it can go once they expire (2026-11-05).
+    (
         "ISIN {isin} resolved via OpenFIGI ({figi_name}); LEI found in "
         "GLEIF.",
         "ISIN {isin} byl dohledán přes OpenFIGI ({figi_name}); LEI bylo "

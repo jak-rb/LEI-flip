@@ -355,6 +355,9 @@ def _openfigi_fallback(
     than the entity's is skipped, and only a unique best candidate (by
     both scores) is asserted: same-named banks and groups exist in
     several countries, and GLEIF's result order must not pick one.
+    The result says the LEI came from that name (ISIN_OPENFIGI_MATCH,
+    ISIN_VIA_OPENFIGI): GLEIF may have no record of the ISIN, so a
+    user checking a match "by ISIN" there finds nothing.
 
     Args:
         entity: The entity being looked up.
@@ -400,7 +403,7 @@ def _openfigi_fallback(
     if _is_dead(candidate.status):
         confidence = min(confidence, 70)
     warnings = [
-        WarningCode.ISIN_ONLY.value,
+        WarningCode.ISIN_VIA_OPENFIGI.value,
         WarningCode.UNVERIFIED_ADDRESS.value,
     ]
     warnings += _status_warnings(candidate.status)
@@ -409,14 +412,15 @@ def _openfigi_fallback(
     return LookupResult(
         lei=candidate.lei,
         lei_status=candidate.status,
-        match_type=MatchType.ISIN_GLEIF_MATCH,
+        match_type=MatchType.ISIN_OPENFIGI_MATCH,
         confidence=confidence,
         gleif_legal_name=candidate.legal_name,
         gleif_legal_address=_fmt(candidate.legal_address),
         gleif_hq_address=_fmt(candidate.hq_address),
         notes=(
-            f"ISIN {isin} resolved via OpenFIGI ({figi_name}); "
-            f"LEI found in GLEIF.{_lapsed_note(candidate.status)}"
+            f"ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}; "
+            f"the LEI was found in GLEIF by that name, not by the ISIN."
+            f"{_lapsed_note(candidate.status)}"
         ),
         match_details={"name_score": round(input_ns, 1)},
         warnings=warnings,

@@ -37,7 +37,13 @@ from core.gleif import (
     GleifServerError,
 )
 from core.lookup import lookup_entity
-from core.models import InputEntity, InputError, LookupResult, is_blank
+from core.models import (
+    InputEntity,
+    InputError,
+    LookupResult,
+    MatchType,
+    is_blank,
+)
 from core.notes import czech_note
 from core.openfigi import OpenFigiUnavailable
 from core.upload import parse_pasted_rows, parse_upload
@@ -719,6 +725,12 @@ def _partition(results: list) -> dict:
                 "lei": algo_lei,
                 "status": match.get("lei_status"),
                 "warnings": match.get("warnings") or [],
+                # How a match through the ISIN was made. A full match
+                # needs no note: the row shows the legal address.
+                "notes": (
+                    None if match.get("match_type") == MatchType.FULL_MATCH
+                    else match.get("notes")
+                ),
             })
         elif decision.get("status") == "confirmed":
             candidate = _candidate_by_lei(closest, decision.get("lei"))
@@ -733,6 +745,7 @@ def _partition(results: list) -> dict:
                     "lei": candidate.get("lei"),
                     "status": candidate.get("status"),
                     "warnings": [],
+                    "notes": None,
                 })
 
         if decision.get("status") == "none" or (not algo_lei and not closest):

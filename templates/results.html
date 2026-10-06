@@ -217,12 +217,14 @@
     {# A row flags a non-ISSUED LEI status and every warning but
        CHECK_FAILED (a missing street or ZIP, on most rows) and
        LAPSED_STATUS (the status flag says it); the CSV/Excel export
-       carries them all. #}
+       carries them all. A match through the ISIN also shows its note,
+       which says how it was made and so where to check it. #}
     {% set hidden_flags = ['LAPSED_STATUS', 'CHECK_FAILED'] %}
     {% set flag_labels = {
         'AMBIGUOUS_MATCH': ('Several similar LEIs', 'Více podobných LEI'),
         'ADDRESS_CONTRADICTION': ('Street and ZIP differ', 'Ulice a PSČ nesouhlasí'),
         'ISIN_ONLY': ('Matched by ISIN', 'Shoda přes ISIN'),
+        'ISIN_VIA_OPENFIGI': ('ISIN via OpenFIGI', 'ISIN přes OpenFIGI'),
         'UNVERIFIED_ADDRESS': ('Address not verified', 'Adresa neověřena'),
         'NAME_UNVERIFIED': ('Name not checked', 'Název neověřen'),
         'HQ_ONLY_MATCH': ('HQ address only', 'Jen adresa centrály'),
@@ -266,6 +268,11 @@
                                   data-cs="{{ label[1] }}">{{ label[0] }}</span>
                             {% endfor %}
                         </span>
+                        {% endif %}
+                        {% if m.notes %}
+                        <span class="match-note"
+                              data-en="{{ m.notes }}"
+                              data-cs="{{ m.notes|czech_note }}">{{ m.notes }}</span>
                         {% endif %}
                     </td>
                     <td>{{ m.country }}</td>

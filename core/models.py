@@ -16,6 +16,9 @@ class MatchType(str, Enum):
     HQ_MATCH = "HQ_MATCH"
     ISIN_MATCH = "ISIN_MATCH"
     ISIN_GLEIF_MATCH = "ISIN_GLEIF_MATCH"
+    #: OpenFIGI gave the ISIN's issuer name, and the LEI was found in
+    #: GLEIF by that name: GLEIF itself may not know the ISIN.
+    ISIN_OPENFIGI_MATCH = "ISIN_OPENFIGI_MATCH"
     NAME_ONLY_MATCH = "NAME_ONLY_MATCH"
     NO_MATCH = "NO_MATCH"
 
@@ -30,6 +33,9 @@ class WarningCode(str, Enum):
     HQ_ONLY_MATCH = "HQ_ONLY_MATCH"
     LAPSED_STATUS = "LAPSED_STATUS"
     ISIN_ONLY = "ISIN_ONLY"
+    #: The ISIN led to the LEI only through OpenFIGI's issuer name, so
+    #: it is checked at OpenFIGI: GLEIF may have no record of it.
+    ISIN_VIA_OPENFIGI = "ISIN_VIA_OPENFIGI"
     #: Matched with no entity name to cross-check (e.g. an ISIN-only
     #: lookup); the identity rests entirely on the identifier.
     NAME_UNVERIFIED = "NAME_UNVERIFIED"

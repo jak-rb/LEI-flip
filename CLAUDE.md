@@ -341,7 +341,11 @@ candidate is not asserted when it lies in another country than the one given
 (`core/isin._other_country`), a direct hit also not when a name candidate with
 another LEI matches the name better (an ISIN of a parent or of the named
 manager's fund must not override the named entity), and the OpenFIGI fallback
-asserts only a unique best candidate. An ISIN mapping to several LEIs offers
+asserts only a unique best candidate. A match that fallback makes is typed
+`ISIN_OPENFIGI_MATCH` and flagged `ISIN_VIA_OPENFIGI` ("ISIN via OpenFIGI"),
+not "Matched by ISIN", and its note says the LEI was found in GLEIF by the
+issuer name: GLEIF may have no record of the ISIN (a user checking FIRY INC
+there found none, 2026-10-06). An ISIN mapping to several LEIs offers
 them in the stepper. The ISIN-based matches flag `COUNTRY_MISMATCH` or
 `COUNTRY_UNVERIFIED` unless the given country is recognised and is the
 record's; every other match flags `COUNTRY_UNVERIFIED` for a missing or
@@ -399,7 +403,8 @@ reply's `counts`, and a failed save shows a bilingual message. The results
 page shows lookup notes in both languages (`core/notes.czech_note`), and each
 matched row flags a non-ISSUED LEI status and its warnings (all but
 `CHECK_FAILED`, which only means a missing street or ZIP), both languages,
-from the template's `flag_labels`. The overall percent shown
+from the template's `flag_labels`; a match through the ISIN also shows its
+note there, saying how it was made. The overall percent shown
 per candidate is display-only (`core/lookup._overall_match`) and never gates
 a match.
 
