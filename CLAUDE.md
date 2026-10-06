@@ -381,20 +381,28 @@ from being asserted). Any other row whose candidates are all stopped
 says "No usable LEI found in GLEIF. The closest records cannot be used:
 ..." with each record's LEI and status (`core.models.stopped_note`,
 applied by `lookup_entity` and, for stored searches, by
-`core.models.shown_note` on the page and in the downloads).
+`core.models.shown_note` on the page and in the downloads), unless its
+note names a record of its own (an HQ-only near-miss on a stopped LEI
+ends "LEI <lei> status: <status>."). Stopped records never crowd an
+ISSUED candidate out of the three review places
+(`core/lookup._keep_an_issued`; an ISIN's records list ISSUED first).
 Review candidates must share a distinctive word with the searched name,
 or clear the name gate (`core/matcher.shares_name_word`): a name
 agreeing only in its legal form ("FISS, spol. s r.o." / "BRŮZA spol. s
 r.o.") is no near-miss. "spol. s r.o." is stripped however its dots and
 spaces fall (`core/address._RE_SPOL_SRO`, as bank exports drop them),
 and a spaced single-letter form ("a. s.") is not stripped right after a
-lone letter, where it ends spaced initials. A run of initials inside a
-name ("EURO F.D. HOLDINGS") is a distinguishing token
-(`core/matcher._initials_run`), while a trailing run or one spelling a
-legal form ("..., L.P.", "N.A.", "P.L.C.", `_LEGAL_FORM_INITIALS`) is
-dropped as before; a token of three letters or fewer is covered only by
-its exact twin ("A.B.C." is not "ABCD"), and names equal but for spacing
-("J.P. Morgan" / "JPMorgan") score 100 (`core/matcher.name_similarity`).
+dotted lone letter, where it ends spaced initials ("J. K. S. Group"; but
+"M & M s. r. o." strips). A run of initials inside a name ("EURO F.D.
+HOLDINGS") is a distinguishing token (`core/matcher._initials_run`),
+while a trailing run, one spelling a legal form ("..., L.P.", "P.L.C.")
+or, after the first word, a legal designation (`_LEGAL_FORM_INITIALS`:
+"N.A.", "S.C.A.", "d.s.s.") is dropped as before. Joined initials and
+any token of three letters or fewer are covered only by their exact
+twin ("A.B.C." is neither "ABCD" nor "A.B.C.D." "ABCDE"), and names
+equal but for spacing ("J.P. Morgan" / "JPMorgan") score 100
+(`core/matcher.name_similarity`). A note's percent is the whole number
+below the score, as the review table shows it.
 
 **The store** (`core/storage.py`) is one `searches` table: `job_id`,
 `created_at` (ISO-8601 UTC text), `mode`, `searched` (entities looked up so

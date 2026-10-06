@@ -9,6 +9,7 @@ returned as NO_MATCH with the near-miss details for manual review.
 """
 
 import logging
+import math
 from typing import Optional
 
 from .address import country_to_iso
@@ -191,10 +192,11 @@ def _name_stopped_records(
     Its plain note ("No LEI found", "manual review is needed", "listed
     for review") would hide them: the row has nothing to accept, so the
     page files it as a no-match and shows only its note (see
-    core.models.stopped_note). A note about a stopped record already
-    (the result carries a status that is not ISSUED) is kept.
+    core.models.stopped_note). A note about a record of its own (the
+    result names one, as a stopped full match or an HQ-only near-miss
+    does) is kept.
     """
-    if result.lei or (result.lei_status and not is_issued(result.lei_status)):
+    if result.lei or result.lei_status or result.gleif_legal_name:
         return result
     note = stopped_note([candidate.model_dump() for candidate in closest])
     if note is not None:
@@ -218,6 +220,11 @@ def _lookup(
         # the records the ISIN maps to go to the review (a stopped one
         # only to be seen). No name was given, so only the address
         # fields (if any) score.
+        # ISSUED records first (in GLEIF's order otherwise), so stopped
+        # ones never crowd them out.
+        to_review = sorted(
+            to_review, key=lambda candidate: not is_issued(candidate.status),
+        )
         closest = []
         for candidate in to_review[:CLOSEST_CANDIDATE_LIMIT]:
             addr_score, details = address_match_score(
@@ -487,7 +494,7 @@ def _hq_only_no_match(
     status = candidate.status
     status_note = ""
     if status and not is_issued(status):
-        status_note = f" LEI status: {status}."
+        status_note = f" LEI {candidate.lei} status: {status}."
 
     result = LookupResult(
         match_type=MatchType.NO_MATCH,
@@ -559,7 +566,8 @@ def _name_only_no_match(
         gleif_legal_address=legal_addr,
         gleif_hq_address=hq_addr,
         notes=(
-            f"Strong name match ({ns:.0f}%) with {candidate.legal_name}, "
+            f"Strong name match ({math.floor(round(ns, 1))}%) with "
+            f"{candidate.legal_name}, "
             f"but the address was not verified - LEI not assigned. Manual "
             f"review recommended."
         ),
@@ -648,17 +656,34 @@ def _closest_candidates(
         reverse=True,
     )
     closest: list[CandidateSummary] = []
-    for name_score, candidate in scored:
+    for name_score, candidate in _keep_an_issued(scored, limit):
         addr_score, details = address_match_score(entity, candidate, "legal")
         closest.append(
             _build_candidate_summary(
                 entity, candidate, name_score, addr_score, details
             )
         )
-        if len(closest) >= limit:
-            break
     closest.sort(key=lambda summary: summary.overall, reverse=True)
     return closest
+
+
+def _keep_an_issued(
+    scored: list[tuple[float, GleifCandidate]], limit: int
+) -> list[tuple[float, GleifCandidate]]:
+    """The first ``limit`` of ``scored``, keeping an ISSUED candidate.
+
+    Stopped records are only to be seen: when they fill every place
+    while an ISSUED candidate is further down, that one takes the last
+    place, so the review never hides the only candidates that may be
+    accepted (and the row is not called one of stopped records).
+    """
+    picked = scored[:limit]
+    if any(is_issued(candidate.status) for _, candidate in picked):
+        return picked
+    issued = next(
+        (pair for pair in scored[limit:] if is_issued(pair[1].status)), None,
+    )
+    return picked[:limit - 1] + [issued] if issued else picked
 
 
 def _name_vs_openfigi(figi_name: str, candidate: GleifCandidate) -> float:
@@ -712,7 +737,9 @@ def _isin_only_openfigi_review(
 
     scored.sort(key=lambda pair: pair[0], reverse=True)
     closest: list[CandidateSummary] = []
-    for name_score, candidate in scored[:CLOSEST_CANDIDATE_LIMIT]:
+    for name_score, candidate in _keep_an_issued(
+        scored, CLOSEST_CANDIDATE_LIMIT,
+    ):
         addr_score, details = address_match_score(entity, candidate, "legal")
         closest.append(
             _build_candidate_summary(

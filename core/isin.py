@@ -10,6 +10,7 @@ Precision-first: every path still requires some name agreement.
 """
 
 import logging
+import math
 import re
 from typing import Optional
 
@@ -349,7 +350,7 @@ def _isin_confirms_name(
         gleif_legal_address=_fmt(name_candidate.legal_address),
         gleif_hq_address=_fmt(name_candidate.hq_address),
         notes=(
-            f"Strong name match ({ns:.0f}%) with "
+            f"Strong name match ({math.floor(round(ns, 1))}%) with "
             f"{name_candidate.legal_name}. ISIN {isin} confirms the LEI."
         ),
         match_details={"name_score": round(ns, 1)},

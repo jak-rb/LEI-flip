@@ -131,10 +131,12 @@ def _load_legal_forms() -> list[str]:
         # collapsed until after the forms are stripped.
         words = r'\s+'.join(re.escape(word) for word in form.split())
         # A spaced form of single letters ("a. s.", "v. o. s.") is not
-        # taken right after a lone letter: there it is the end of spaced
-        # initials, as in "J. K. S. Group" or "H. A. S. spol. s r.o.".
+        # taken right after a dotted lone letter: there it is the end of
+        # spaced initials, as in "J. K. S. Group" or "H. A. S. spol. s
+        # r.o.". After an undotted one ("M & M s. r. o.", "Firma B a.
+        # s.") it is the legal form.
         after_initial = (
-            r'(?<!\s)(?<!\b[^\W\d_])(?<!\b[^\W\d_]\.)'
+            r'(?<!\s)(?<!\b[^\W\d_]\.)'
             if ' ' in form and re.fullmatch(r'[^\W\d_]\.', form.split()[0])
             else ''
         )

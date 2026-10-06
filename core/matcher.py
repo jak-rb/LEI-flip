@@ -58,11 +58,22 @@ _SERIAL_WORDS = frozenset({
 #: strip (it would strip them from every name): "N.A." (a US national
 #: bank), "S.C.A.", "S.C.S.", "L.P.", "S.A.B. de C.V." and the Slovak
 #: pension company types "d.s.s." and "d.d.s.". In mid-name they are
-#: noise like the rest of the legal form, not initials. (The Slovak fund
-#: types a.d.f. / i.d.f. / d.d.f. do tell funds apart, so stay tokens.)
+#: noise like the rest of the legal form, not initials; at the start of
+#: a name ("L.P. Holdings") they are initials like any other. (The
+#: Slovak fund types a.d.f. / i.d.f. / d.d.f. do tell funds apart, so
+#: stay tokens.)
 _LEGAL_FORM_INITIALS = frozenset({
     "na", "sca", "scs", "scsp", "lp", "sab", "cv", "dss", "dds",
 })
+
+
+class _Initials(str):
+    """A token joined from initials ("F.D." -> "fd").
+
+    It needs its exact twin to count as covered (see _token_covered): a
+    longer acronym that merely starts alike ("ABCDE" for "A.B.C.D.") is
+    another name.
+    """
 
 
 def _is_letter(word: str) -> bool:
@@ -91,7 +102,7 @@ def _initials_run(words: list[str], start: int) -> tuple[int, bool]:
     )
     initials = not (
         len(letters) < 2 or trailing
-        or "".join(letters) in _LEGAL_FORM_INITIALS
+        or start > 0 and "".join(letters) in _LEGAL_FORM_INITIALS
         or is_legal_form("".join(letters))
         or is_legal_form(".".join(letters) + ".")
     )
@@ -121,7 +132,7 @@ def _significant_tokens(normalized: str) -> list[str]:
         if _is_letter(words[index]) and not _after_serial(previous):
             end, initials = _initials_run(words, index)
             if initials:
-                tokens.append("".join(words[index:end]))
+                tokens.append(_Initials("".join(words[index:end])))
                 previous = words[end - 1]
                 index = end
                 continue
@@ -150,10 +161,10 @@ def _after_serial(previous: str) -> bool:
 
 def _token_covered(token: str, others: list[str]) -> bool:
     """Whether ``token`` has a fuzzy counterpart among ``others``."""
-    # A short token, such as joined initials, needs its exact twin: at
-    # three letters one more is still 85.7 alike, and "A.B.C." is not
-    # "ABCD".
-    if len(token) <= 3:
+    # Joined initials, and any short token, need their exact twin: at
+    # three letters one more is still 85.7 alike, and neither "A.B.C."
+    # nor "ABC" is "ABCD".
+    if isinstance(token, _Initials) or len(token) <= 3:
         return token in others
     return any(
         fuzz.ratio(token, o) >= _TOKEN_COVER_THRESHOLD for o in others

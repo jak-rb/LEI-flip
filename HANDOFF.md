@@ -54,6 +54,11 @@ gate dropped when split differently ("Raiffeisen Bank"), rows of only
 stopped records saying "No LEI found" (now "No usable LEI found in
 GLEIF. The closest records cannot be used: ..."), spaced initials,
 mid-name "N.A.", "A.B.C." vs "ABCD", score display and old stored rows.
+A second round (fix confirmers plus fresh reviewers of the fix diff)
+found two of them only partly fixed and six slips in the fixes (two of
+them new wrong-LEI paths: "L.P. Holdings" scoring 100 against "Holdings"
+and "Firma B a. s." against "FIRMA BAS a.s."); all fixed in a fourth
+commit, again test-first (891 tests).
 
 ## How the morning's last two were checked
 

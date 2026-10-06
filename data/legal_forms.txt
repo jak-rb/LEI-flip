@@ -24,6 +24,8 @@ nyrt.
 nyrt
 jsc
 pjsc
+ojsc
+cjsc
 plc
 plc.
 ltd

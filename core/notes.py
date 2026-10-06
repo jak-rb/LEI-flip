@@ -220,10 +220,12 @@ _NOTE_TEMPLATES = [
 ]
 
 # The sentence some notes end with when the LEI is not maintained: the
-# HQ-only near-miss adds the first; the ISIN matches added the second
+# HQ-only near-miss adds the first (the second until 2026-10-06, without
+# the LEI); the ISIN matches added the third
 # until 2026-10-06, when they stopped asserting any LEI but an ISSUED
 # one, and the searches stored by then keep it (until 2026-11-05).
 _STATUS_TEMPLATES = [
+    (" LEI {lei} status: {status}.", " Stav LEI {lei}: {status}."),
     (" LEI status: {status}.", " Stav LEI: {status}."),
     (
         " WARNING: the LEI has status {status} (not maintained).",
@@ -234,12 +236,19 @@ _STATUS_TEMPLATES = [
 _FIELD_RE = re.compile(r"\{(\w+)\}")
 
 
+#: What a field matches: any text, but an LEI only as one (20 letters
+#: and digits), or "LEI {lei} status" would take the "LEI not assigned"
+#: earlier in the same note for its start.
+_FIELD_PATTERNS = {"lei": "[A-Z0-9]{20}"}
+
+
 def _compile(english: str) -> re.Pattern:
     """A regex matching an English template, one group per field."""
     parts = _FIELD_RE.split(english)
     return re.compile(
         "".join(
-            f"(?P<{part}>.*?)" if position % 2 else re.escape(part)
+            f"(?P<{part}>{_FIELD_PATTERNS.get(part, '.*?')})"
+            if position % 2 else re.escape(part)
             for position, part in enumerate(parts)
         ),
         re.DOTALL,
@@ -273,7 +282,9 @@ def czech_note(note: Optional[str]) -> str:
         match = pattern.fullmatch(note)
         if match:
             body = match["body"]
-            status_sentence = czech.format(status=match["status"])
+            fields = match.groupdict()
+            del fields["body"]
+            status_sentence = czech.format(**fields)
             break
     for pattern, czech in _NOTES:
         match = pattern.fullmatch(body)

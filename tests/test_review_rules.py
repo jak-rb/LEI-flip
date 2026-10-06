@@ -171,9 +171,16 @@ def test_a_shared_legal_form_adds_nothing_to_a_name_score(other):
     ("Euro-Holdings Ltd", "EURO F.D. HOLDINGS S.A."),
     ("Morgan", "J.P. Morgan"),
     ("Holdings Ltd", "C.D. Holdings Ltd"),
-    # Three joined initials are no four-letter acronym (review finding).
+    # Three joined initials are no four-letter acronym (review finding),
+    # nor four a five-letter one (second round).
     ("A.B.C. Trading", "ABCD Trading"),
     ("ABC Trading", "ABCD Trading"),
+    ("A.B.C.D. Trading s.r.o.", "ABCDE Trading s.r.o."),
+    # A leading run is initials, whatever it spells (second round).
+    ("L.P. Holdings Ltd", "Holdings Ltd"),
+    ("N.A. Capital Partners LLC", "Capital Partners LLC"),
+    # A legal form left by a lone letter is no initial to join.
+    ("Firma B a. s.", "FIRMA BAS a.s."),
     # Fund types of one company still tell its funds apart.
     ("Indexovy negarantovany a.d.f. UNIQA",
      "Indexovy negarantovany i.d.f. UNIQA"),
@@ -203,6 +210,15 @@ def test_initials_tell_names_apart(searched, other):
     # An undotted "spol s r o" still matches GLEIF's (review finding).
     ("FISS SPOL S R O", "FISS, spol. s r.o."),
     ("XYZ spol s r o v likvidaci", "XYZ, spol. s r.o. v likvidaci"),
+    # A spaced form after an undotted lone letter is the legal form
+    # (second round).
+    ("M & M s. r. o.", "M&M s.r.o."),
+    ("T & T a. s.", "T&T a.s."),
+    ("A B C s. r. o.", "ABC s.r.o."),
+    ("Firma B a. s., odštěpný závod", "FIRMA B, a.s., odštěpný závod"),
+    # A former OJSC / CJSC is the same JSC (second round).
+    ("OJSC Halyk Bank", "JSC Halyk Bank"),
+    ("CJSC Alfa Bank", "JSC Alfa Bank"),
 ])
 def test_initials_and_spacing_of_the_same_name_still_match(searched, other):
     assert name_similarity(searched, other) == 100
@@ -827,4 +843,75 @@ def test_an_older_stored_candidate_gets_its_address_score_back():
     assert scores["address"] == {"value": 100, "state": "pass"}
     bare = app_module._review_candidate({"name": "Alpha"}, candidate)
     assert bare["scores"]["address"] == {"value": None, "state": "na"}
+
+
+# ---- found by the second review round of 2026-10-06 ----
+
+def test_stopped_twins_do_not_crowd_out_an_issued_candidate():
+    # Three stopped exact-name records fill the review's three places;
+    # the ISSUED near-miss further down still gets one, and its HQ-only
+    # note is kept, not replaced by "No usable LEI found".
+    entity = InputEntity(name="Alpha Holding a.s.", country="CZ", town="Praha")
+    stopped = [
+        _candidate("Alpha Holding a.s.", f"{status[0]}" * 20, city=city,
+                   status=status)
+        for status, city in (("LAPSED", "Brno"), ("RETIRED", "Ostrava"),
+                             ("MERGED", "Plzen"))
+    ]
+    issued = _candidate(
+        "Alpha Holdings a.s.", "I" * 20, city="Brno",
+        hq=_address("CZ", "Praha", "Hq 2", "11000"),
+    )
+    result, closest = lookup_module.lookup_entity(
+        entity, _CannedGleif([*stopped, issued]),
+    )
+    assert "I" * 20 in [c.lei for c in closest] and len(closest) == 3
+    assert "matches only the headquarters" in result.notes
+    job_id = _stored_job([(entity, result, closest)])
+    assert _card_counts(_page(job_id))["validate"] == 1
+    assert "No usable LEI" not in _exported(job_id)[0]["Notes"]
+
+
+def test_an_isin_mapping_offers_its_issued_record_first():
+    records = [
+        _candidate("Alpha Holding a.s.", "R" * 20, status="RETIRED"),
+        _candidate("Alpha Holding SE", "M" * 20, status="MERGED"),
+        _candidate("Alpha Holding AG", "L" * 20, status="LAPSED"),
+        _candidate("Alpha Holding Ltd", "I" * 20),
+    ]
+    result, closest = lookup_module.lookup_entity(
+        InputEntity(isin="CZ0009010468"), _CannedGleif(by_isin=records),
+    )
+    assert "I" * 20 in [c.lei for c in closest]
+    assert "multiple LEIs" in result.notes
+
+
+def test_an_hq_only_near_miss_on_a_stopped_lei_names_the_lei():
+    entity = InputEntity(name="Alpha Holding a.s.", country="CZ", town="Praha")
+    alpha = _candidate(
+        "Alpha Holding a.s.", "P" * 20, city="Brno", status="PENDING_TRANSFER",
+        hq=_address("CZ", "Praha", "Hq 2", "11000"),
+    )
+    result, closest = lookup_module.lookup_entity(
+        entity, _CannedGleif([alpha]),
+    )
+    assert result.notes.endswith(f"LEI {'P' * 20} status: PENDING_TRANSFER.")
+    english, czech = _no_match_row(_page(_stored_job([(entity, result,
+                                                       closest)])))
+    assert english == result.notes
+    assert czech.endswith(f"Stav LEI {'P' * 20}: PENDING_TRANSFER.")
+    assert "matches only" not in czech
+
+
+def test_a_note_and_the_table_show_one_name_score():
+    # 96.77 reads 96 in the table; the note must not say 97%.
+    entity = InputEntity(name="ABC Development s.r.o.", town="Ostrava")
+    other = _candidate("ABC Developments s.r.o.", "A" * 20, city="Brno")
+    result, closest = lookup_module.lookup_entity(
+        entity, _CannedGleif([other]),
+    )
+    shown = app_module._review_candidate(
+        {"name": entity.name}, closest[0].model_dump(),
+    )["scores"]["name"]["value"]
+    assert f"Strong name match ({shown}%)" in result.notes
 

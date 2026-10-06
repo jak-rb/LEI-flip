@@ -118,15 +118,17 @@ def shown_note(row: dict) -> str:
     """A stored row's lookup note, as the page and the downloads show it.
 
     A row with no match whose candidates are all stopped gets the note
-    naming them (see stopped_note), unless its note is about a stopped
-    record already (the match carries a status that is not ISSUED):
-    rows stored before 2026-10-06, and plain notes such as "No LEI
-    found", would otherwise hide them.
+    naming them (see stopped_note), unless its note is about a record
+    of its own (the match names one, as a stopped full match or an
+    HQ-only near-miss does): rows stored before 2026-10-06, and plain
+    notes such as "No LEI found", would otherwise hide them.
     """
     match = row.get("match") or {}
     note = match.get("notes") or ""
-    status = match.get("lei_status")
-    if match.get("lei") or (status and not is_issued(status)):
+    if (
+        match.get("lei") or match.get("lei_status")
+        or match.get("gleif_legal_name")
+    ):
         return note
     return stopped_note(row.get("closest") or []) or note
 
