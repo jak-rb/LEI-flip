@@ -183,10 +183,10 @@ def resolve_via_isin(
         return None
 
     isin_candidates = client.search_by_isin(isin)
+    rivals = [c for c in (hq_candidate, name_candidate) if c is not None]
 
     direct = _direct_isin_match(
-        entity, isin, isin_candidates,
-        rivals=[c for c in (hq_candidate, name_candidate) if c is not None],
+        entity, isin, isin_candidates, rivals=rivals,
     )
     if direct:
         return direct
@@ -205,7 +205,7 @@ def resolve_via_isin(
         if confirmed:
             return confirmed
 
-    return _openfigi_fallback(entity, isin, client)
+    return _openfigi_fallback(entity, isin, client, rivals)
 
 
 def _direct_isin_match(
@@ -343,7 +343,10 @@ def _isin_confirms_name(
 
 
 def _openfigi_fallback(
-    entity: InputEntity, isin: str, client: GleifClient
+    entity: InputEntity,
+    isin: str,
+    client: GleifClient,
+    rivals: list[GleifCandidate],
 ) -> Optional[LookupResult]:
     """Map the ISIN to a name via OpenFIGI, then re-search GLEIF.
 
@@ -355,6 +358,11 @@ def _openfigi_fallback(
     than the entity's is skipped, and only a unique best candidate (by
     both scores) is asserted: same-named banks and groups exist in
     several countries, and GLEIF's result order must not pick one.
+    As on the direct path, a candidate is skipped too when the name
+    search found another LEI whose name matches better (``rivals``):
+    OpenFIGI names the ISIN's issuer, which may be a parent or a serial
+    sibling of the entity named, and the threshold lets such a pair
+    through ("2023-A" and "2023-B" score 70).
     The result says the LEI came from that name (ISIN_OPENFIGI_MATCH,
     ISIN_VIA_OPENFIGI): GLEIF may have no record of the ISIN, so a
     user checking a match "by ISIN" there finds nothing.
@@ -363,10 +371,15 @@ def _openfigi_fallback(
         entity: The entity being looked up.
         isin: The normalised, validated ISIN.
         client: An open GLEIF client.
+        rivals: The near-misses of the name search (see
+            _direct_isin_match).
 
     Returns:
         A positive LookupResult, or None if nothing corroborated.
     """
+    rival_scores = [
+        (rival.lei, best_name_score(entity, rival)) for rival in rivals
+    ]
     # (input score + OpenFIGI score, input score, candidate, name)
     passing: list[tuple[float, float, GleifCandidate, str]] = []
     for figi_name in resolve_isin_to_names(isin, deadline=client.deadline):
@@ -382,6 +395,10 @@ def _openfigi_fallback(
                 input_ns < OPENFIGI_NAME_THRESHOLD
                 or figi_ns < OPENFIGI_NAME_THRESHOLD
                 or _other_country(entity, candidate)
+                or any(
+                    lei != candidate.lei and score > input_ns
+                    for lei, score in rival_scores
+                )
             ):
                 continue
             passing.append(

@@ -338,9 +338,11 @@ last resort - be resolved to an issuer name via OpenFIGI (`core/openfigi.py`)
 and re-searched; an ISIN-only input is resolved by GLEIF's authoritative ISIN
 mapping, with an OpenFIGI review fallback. A direct ISIN hit or an OpenFIGI
 candidate is not asserted when it lies in another country than the one given
-(`core/isin._other_country`), a direct hit also not when a name candidate with
-another LEI matches the name better (an ISIN of a parent or of the named
-manager's fund must not override the named entity), and the OpenFIGI fallback
+(`core/isin._other_country`), nor when a name candidate with another LEI
+matches the name better (an ISIN of a parent, a serial sibling or the named
+manager's fund must not override the named entity; the OpenFIGI fallback got
+this check on 2026-10-06, as its 65 let "Trust 2023-B", at 70, override
+"Trust 2023-A"), and the OpenFIGI fallback
 asserts only a unique best candidate. A match that fallback makes is typed
 `ISIN_OPENFIGI_MATCH` and flagged `ISIN_VIA_OPENFIGI` ("ISIN via OpenFIGI"),
 not "Matched by ISIN", and its note says the LEI was found in GLEIF by the
@@ -506,8 +508,9 @@ validation workflow and the CSV/Excel downloads are real. `tests/` covers the
 store and the route flows with GLEIF faked; run it before every change to the
 web layer. Matching behaviour (thresholds in `core/constants.py`) is
 audit-validated and unchanged from the CodeNOW version apart from the
-legal-form whitespace and the 2026-09-30 precision fixes above - re-run the
-matcher audit (at least the offline replay) before tuning it.
+legal-form whitespace, the 2026-09-30 precision fixes and the OpenFIGI
+fallback's rival check (2026-10-06, offline replay unchanged) above - re-run
+the matcher audit (at least the offline replay) before tuning it.
 
 An optional LLM-assisted step (e.g. helping disambiguate near-misses) is a
 possible next addition; it would plug in after `core/lookup.lookup_entity`

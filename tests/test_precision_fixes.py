@@ -359,6 +359,98 @@ def test_an_ambiguous_openfigi_fallback_asserts_nothing(monkeypatch):
     ) is None
 
 
+class _ByNameGleif(_CannedGleif):
+    """A canned client whose name search answers by the searched name.
+
+    A search for a name holding one of the ``answers`` words returns
+    that word's records, as many as a page holds; any other name gets
+    ``by_name``.
+    """
+
+    def __init__(self, answers, by_name=(), by_isin=()):
+        super().__init__(by_name, by_isin)
+        self.answers = answers
+
+    def search_by_name(self, name, country=None, page_size=10):
+        for word, records in self.answers.items():
+            if word in name.lower():
+                return records[:page_size]
+        return self.by_name
+
+
+def test_the_openfigi_fallback_does_not_override_the_named_entity(
+    monkeypatch,
+):
+    # OpenFIGI names the ISIN's issuer, the Austrian parent, and GLEIF's
+    # search by that name finds only the parent. Its name scores 65.1
+    # against the Czech bank's, over the fallback's 65: with no country
+    # to tell them apart, the parent's LEI was asserted.
+    monkeypatch.setattr(
+        isin_module, "resolve_isin_to_names",
+        lambda *a, **k: ["RAIFFEISEN BANK INTERNATIONAL AG"],
+    )
+    entity = InputEntity(
+        name="Raiffeisenbank a.s.", town="Brno", isin=RBI_ISIN,
+    )
+    client = _ByNameGleif(
+        {"international": [_rbi()]},
+        by_name=[_raiffeisenbank()], by_isin=[_rbi()],
+    )
+    result, closest = lookup_module.lookup_entity(entity, client)
+    assert result.lei is None
+    assert "C" * 20 in [c.lei for c in closest]
+
+
+def test_the_openfigi_fallback_does_not_assert_a_serial_sibling(
+    monkeypatch,
+):
+    # The same with a sibling's ISIN, in the named trust's own country,
+    # so the country check cannot help: GLEIF's search by the sibling's
+    # name (5 records a page) did not list the named trust, and
+    # "2023-A" against "2023-B" scores 70.
+    family = "Ford Credit Auto Owner Trust"
+    named = _candidate(
+        f"{family} 2023-A", "N" * 20, country="US", city="Wilmington",
+    )
+    siblings = [
+        _candidate(
+            f"{family} {series}", f"{index:020d}", country="US",
+            city="Wilmington",
+        )
+        for index, series in enumerate(
+            ("2023-B", "2023-C", "2023-D", "2024-A", "2024-B", "2024-C"),
+        )
+    ]
+    monkeypatch.setattr(
+        isin_module, "resolve_isin_to_names",
+        lambda *a, **k: [f"{family.upper()} 2023-B"],
+    )
+    # Any valid ISIN: OpenFIGI is faked.
+    entity = InputEntity(
+        name=f"{family} 2023-A", country="US", town="Detroit",
+        isin=APPLE_ISIN,
+    )
+    client = _ByNameGleif(
+        {"2023-b": siblings}, by_name=[named, *siblings],
+    )
+    result, closest = lookup_module.lookup_entity(entity, client)
+    assert result.lei is None
+    assert "N" * 20 in [c.lei for c in closest]
+
+
+def test_an_equally_named_rival_leaves_the_openfigi_fallback(monkeypatch):
+    # Only a better name blocks: both banks are named "Alpha Bank", and
+    # the one in the given country is still asserted.
+    monkeypatch.setattr(
+        isin_module, "resolve_isin_to_names", lambda *a, **k: ["ALPHA BANK"],
+    )
+    entity = InputEntity(name="Alpha Bank", country="Greece", isin=RBI_ISIN)
+    result, _ = lookup_module.lookup_entity(
+        entity, _CannedGleif(by_name=_alpha_banks()),
+    )
+    assert result.lei == "G" * 20
+
+
 def test_a_multi_lei_isin_offers_its_records_for_review():
     records = [
         _candidate("Alpha Holding a.s.", "A" * 20),
