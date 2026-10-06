@@ -383,8 +383,9 @@ def test_the_openfigi_fallback_does_not_override_the_named_entity(
 ):
     # OpenFIGI names the ISIN's issuer, the Austrian parent, and GLEIF's
     # search by that name finds only the parent. Its name scores 65.1
-    # against the Czech bank's, over the fallback's 65: with no country
-    # to tell them apart, the parent's LEI was asserted.
+    # against the Czech bank's, which the fallback's 65 let through:
+    # with no country to tell them apart, the parent's LEI was
+    # asserted. The rival check and the name gate now each stop it.
     monkeypatch.setattr(
         isin_module, "resolve_isin_to_names",
         lambda *a, **k: ["RAIFFEISEN BANK INTERNATIONAL AG"],
@@ -436,6 +437,50 @@ def test_the_openfigi_fallback_does_not_assert_a_serial_sibling(
     result, closest = lookup_module.lookup_entity(entity, client)
     assert result.lei is None
     assert "N" * 20 in [c.lei for c in closest]
+
+
+def test_the_openfigi_fallback_holds_the_typed_name_to_the_name_gate(
+    monkeypatch,
+):
+    # Found by a live replay of real searches (2026-10-06): GLEIF has no
+    # record of Genius Sports Limited, the ISIN's issuer, so nothing
+    # rivals the record it has, a lapsed US "GENIUS SPORTS MEDIA INC.".
+    # "Media" caps the typed name at 70, under the name gate, but the
+    # fallback asked only 65 of it.
+    media = _candidate(
+        "GENIUS SPORTS MEDIA INC.", "M" * 20, country="US",
+        city="Wilmington", status="LAPSED",
+    )
+    monkeypatch.setattr(
+        isin_module, "resolve_isin_to_names",
+        lambda *a, **k: ["GENIUS SPORTS LTD"],
+    )
+    entity = InputEntity(name="Genius Sports Ltd.", isin="GG00BMF1JR16")
+    result, closest = lookup_module.lookup_entity(
+        entity, _CannedGleif([media]),
+    )
+    assert result.lei is None
+    assert [c.lei for c in closest] == ["M" * 20]
+
+
+def test_the_rival_check_blocks_a_name_that_clears_the_gate(monkeypatch):
+    # OpenFIGI names a near twin of the entity named, and GLEIF's search
+    # by that name lists only the twin, whose name clears the gate
+    # (96.3) but matches the typed name worse than the entity found.
+    monkeypatch.setattr(
+        isin_module, "resolve_isin_to_names",
+        lambda *a, **k: ["ALPHA HOLDINGS"],
+    )
+    named = _candidate("Alpha Holding a.s.", "A" * 20)
+    twin = _candidate("Alpha Holdings a.s.", "B" * 20)
+    entity = InputEntity(
+        name="Alpha Holding a.s.", town="Brno", isin=APPLE_ISIN,
+    )
+    result, closest = lookup_module.lookup_entity(
+        entity, _ByNameGleif({"holdings": [twin]}, by_name=[named]),
+    )
+    assert result.lei is None
+    assert "A" * 20 in [c.lei for c in closest]
 
 
 def test_an_equally_named_rival_leaves_the_openfigi_fallback(monkeypatch):

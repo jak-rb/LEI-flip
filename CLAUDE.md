@@ -341,9 +341,12 @@ candidate is not asserted when it lies in another country than the one given
 (`core/isin._other_country`), nor when a name candidate with another LEI
 matches the name better (an ISIN of a parent, a serial sibling or the named
 manager's fund must not override the named entity; the OpenFIGI fallback got
-this check on 2026-10-06, as its 65 let "Trust 2023-B", at 70, override
-"Trust 2023-A"), and the OpenFIGI fallback
-asserts only a unique best candidate. A match that fallback makes is typed
+this check on 2026-10-06), and the OpenFIGI fallback asserts only a unique
+best candidate whose name clears the usual 75 against the typed name (65
+against OpenFIGI's, often cut short). It asked only 65 of the typed name
+until 2026-10-06, when a live replay of real searches found a lapsed "GENIUS
+SPORTS MEDIA INC." (70) asserted for "Genius Sports Ltd.", which GLEIF lacks.
+A match that fallback makes is typed
 `ISIN_OPENFIGI_MATCH` and flagged `ISIN_VIA_OPENFIGI` ("ISIN via OpenFIGI"),
 not "Matched by ISIN", and its note says the LEI was found in GLEIF by the
 issuer name: GLEIF may have no record of the ISIN (a user checking FIRY INC
@@ -513,8 +516,12 @@ store and the route flows with GLEIF faked; run it before every change to the
 web layer. Matching behaviour (thresholds in `core/constants.py`) is
 audit-validated and unchanged from the CodeNOW version apart from the
 legal-form whitespace, the 2026-09-30 precision fixes and the OpenFIGI
-fallback's rival check (2026-10-06, offline replay unchanged) above - re-run
-the matcher audit (at least the offline replay) before tuning it.
+fallback's rival check and name gate (2026-10-06: offline replay unchanged;
+a live replay of the 59 ISIN rows searched in the 30 days before changed only
+the Genius Sports row) above - re-run the matcher audit (at least the offline
+replay) before tuning it. The offline replay never reaches the OpenFIGI
+fallback; the gitignored `docs/live-replay/` replays real searches live
+(GLEIF and OpenFIGI calls: ask the user first).
 
 An optional LLM-assisted step (e.g. helping disambiguate near-misses) is a
 possible next addition; it would plug in after `core/lookup.lookup_entity`

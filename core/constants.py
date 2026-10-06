@@ -57,10 +57,11 @@ TOKEN_COVER_THRESHOLD = 85
 #: Minimum name score to accept an ISIN-based match (used in step 5.7).
 ISIN_NAME_THRESHOLD = 50
 
-#: Minimum fuzzy-match score (0-100) for the OpenFIGI ISIN fallback:
-#: BOTH the input name AND the OpenFIGI-resolved name must score at
-#: least this against a GLEIF candidate before its LEI is accepted. This
-#: double-match guard (core/isin.py) stops OpenFIGI inventing a match.
+#: Minimum fuzzy-match score (0-100) of the OpenFIGI-resolved name
+#: against a GLEIF candidate in the OpenFIGI ISIN fallback, where the
+#: input name must clear NAME_MATCH_THRESHOLD (until 2026-10-06 it
+#: needed only this). This double-match guard (core/isin.py) stops
+#: OpenFIGI inventing a match.
 OPENFIGI_NAME_THRESHOLD = 65
 
 #: If two or more distinct LEIs clear the FULL_MATCH gate within this

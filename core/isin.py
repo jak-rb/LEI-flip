@@ -17,6 +17,7 @@ from .address import country_to_iso
 from .constants import (
     ISIN_NAME_THRESHOLD,
     LAPSED_STATUSES,
+    NAME_MATCH_THRESHOLD,
     OPENFIGI_NAME_THRESHOLD,
 )
 from .gleif import GleifClient
@@ -352,17 +353,21 @@ def _openfigi_fallback(
 
     The last-resort ISIN path, tried only after the direct and near-miss
     paths miss. Precision guard: a candidate is accepted only when BOTH
-    the input name and the OpenFIGI-resolved name fuzzy-match it (each
-    >= OPENFIGI_NAME_THRESHOLD), so OpenFIGI can never invent a match.
+    the input name and the OpenFIGI-resolved name fuzzy-match it, so
+    OpenFIGI can never invent a match. Nothing but names links the
+    candidate here, so the input name must clear the usual
+    NAME_MATCH_THRESHOLD, which a name with a token the other lacks
+    ("Genius Sports" against "Genius Sports Media", "2023-A" against
+    "2023-B") never does; OpenFIGI's names, often cut short, need only
+    OPENFIGI_NAME_THRESHOLD.
     The re-search is by name only, so a candidate in another country
     than the entity's is skipped, and only a unique best candidate (by
     both scores) is asserted: same-named banks and groups exist in
     several countries, and GLEIF's result order must not pick one.
     As on the direct path, a candidate is skipped too when the name
     search found another LEI whose name matches better (``rivals``):
-    OpenFIGI names the ISIN's issuer, which may be a parent or a serial
-    sibling of the entity named, and the threshold lets such a pair
-    through ("2023-A" and "2023-B" score 70).
+    OpenFIGI names the ISIN's issuer, which may be a relative of the
+    entity named.
     The result says the LEI came from that name (ISIN_OPENFIGI_MATCH,
     ISIN_VIA_OPENFIGI): GLEIF may have no record of the ISIN, so a
     user checking a match "by ISIN" there finds nothing.
@@ -392,7 +397,7 @@ def _openfigi_fallback(
             input_ns = best_name_score(entity, candidate)
             figi_ns = name_similarity(figi_name, candidate.legal_name)
             if (
-                input_ns < OPENFIGI_NAME_THRESHOLD
+                input_ns < NAME_MATCH_THRESHOLD
                 or figi_ns < OPENFIGI_NAME_THRESHOLD
                 or _other_country(entity, candidate)
                 or any(
