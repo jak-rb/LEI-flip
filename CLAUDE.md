@@ -467,6 +467,9 @@ a match.
 
 ### Current state
 
+Open items of the 2026-10-06 session, and what a next session could take
+up, are in `HANDOFF.md`.
+
 The 2026-09-23 test run's backlog (the former `HANDOFF.md`) is done: every
 confirmed defect was fixed test-first, re-verified by an adversarial pass,
 and shipped. Its four open questions were settled on 2026-09-24: the
