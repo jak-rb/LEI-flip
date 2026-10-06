@@ -29,6 +29,11 @@ from flask import (
 from pydantic import ValidationError
 
 from core import export, storage
+from core.constants import (
+    CITY_MATCH_THRESHOLD,
+    NAME_MATCH_THRESHOLD,
+    STREET_MATCH_THRESHOLD,
+)
 from core.gleif import (
     DeadlineExceeded,
     GleifApiError,
@@ -37,13 +42,16 @@ from core.gleif import (
     GleifRateLimited,
     GleifServerError,
 )
-from core.lookup import lookup_entity
+from core.lookup import NOT_FOUND_NOTE, lookup_entity
 from core.models import (
     InputEntity,
     InputError,
     LookupResult,
     MatchType,
+    has_acceptable_candidate,
     is_blank,
+    is_issued,
+    standing_decision,
 )
 from core.notes import czech_note
 from core.openfigi import OpenFigiUnavailable
@@ -278,13 +286,14 @@ def _bucket_counts(results: list) -> dict:
     """Count looked-up rows per bucket: matched / to validate / miss.
 
     Every row lands in exactly one bucket: an asserted match, a
-    near-miss with candidates to validate, or an outright miss.
+    near-miss with a candidate the user may accept (see
+    core.models.has_acceptable_candidate), or a miss.
     """
     matched = need_validation = unmatched = 0
     for row in results:
         if (row.get("match") or {}).get("lei"):
             matched += 1
-        elif row.get("closest"):
+        elif has_acceptable_candidate(row.get("closest") or []):
             need_validation += 1
         else:
             unmatched += 1
@@ -689,6 +698,59 @@ def _display_flags(warnings: list, street: str | None) -> list:
     return warnings
 
 
+#: The gates a review candidate's scores are coloured by: the matcher's
+#: own (core/constants.py). The address score is street and ZIP
+#: agreement, so it is held to the street's.
+_SCORE_GATES = {
+    "name": NAME_MATCH_THRESHOLD,
+    "city": CITY_MATCH_THRESHOLD,
+    "address": STREET_MATCH_THRESHOLD,
+}
+
+
+def _shown_score(value, comparable: bool) -> dict:
+    """A score as the stepper shows it: its value and pass / fail / na.
+
+    "na" (shown as a dash) when there is nothing to compare, which
+    differs from a disagreement.
+    """
+    if not comparable or not isinstance(value, (int, float)):
+        return {"value": None, "state": "na"}
+    return {"value": round(value), "state": value}
+
+
+def _review_candidate(source: dict, candidate: dict) -> dict:
+    """A stored candidate as the validation stepper shows it.
+
+    Adds its name, city and address scores (see _shown_score) and
+    whether the user may accept it: only an ISSUED LEI may be (see
+    core.models.is_issued); any other is shown only to be seen.
+    """
+    scores = {
+        "name": _shown_score(
+            candidate.get("name_score"),
+            bool(source.get("name")) or bool(candidate.get("name_score")),
+        ),
+        "city": _shown_score(
+            candidate.get("city_score"),
+            bool((source.get("city") or "").strip() and candidate.get("city")),
+        ),
+        "address": _shown_score(
+            candidate.get("address_score"),
+            candidate.get("address_score") is not None,
+        ),
+    }
+    for kind, score in scores.items():
+        if score["value"] is not None:
+            passed = score["state"] >= _SCORE_GATES[kind]
+            score["state"] = "pass" if passed else "fail"
+    return {
+        **candidate,
+        "scores": scores,
+        "usable": is_issued(candidate.get("status")),
+    }
+
+
 def _candidate_by_lei(closest: list, lei) -> dict | None:
     """The stored candidate with this LEI, or None if absent."""
     for candidate in closest:
@@ -700,10 +762,14 @@ def _candidate_by_lei(closest: list, lei) -> dict | None:
 def _partition(results: list) -> dict:
     """Sort stored rows into matched / no-match / to-validate groups.
 
-    A row is "to validate" when it has candidates but no algorithmic
-    match. Such a row also appears under matched (if a candidate was
-    confirmed) or no-match (if marked "none"), so the bottom tables show
-    the current state while the stepper stays navigable for changes.
+    A row is "to validate" when it has no algorithmic match and a
+    candidate the user may accept (an ISSUED LEI: see
+    core.models.has_acceptable_candidate); a row whose candidates are
+    all stopped by their status has nothing to decide, and is a
+    no-match. A row to validate also appears under matched (if a
+    candidate was confirmed) or no-match (if marked "none"), so the
+    bottom tables show the current state while the stepper stays
+    navigable for changes.
 
     Args:
         results: The stored per-entity result rows.
@@ -721,15 +787,26 @@ def _partition(results: list) -> dict:
         source = row.get("input", {})
         match = row.get("match", {})
         closest = row.get("closest", [])
-        decision = row.get("decision") or {}
+        decision = standing_decision(row)
         algo_lei = match.get("lei")
+        reviewable = not algo_lei and has_acceptable_candidate(closest)
 
-        if closest and not algo_lei:
+        if reviewable:
             to_validate.append({
                 "index": index,
                 "input": source,
-                "closest": closest,
+                "closest": [
+                    _review_candidate(source, candidate)
+                    for candidate in closest
+                ],
                 "decision": decision or None,
+                # Why it was not matched (an OpenFIGI issuer name, an
+                # HQ-only address...), shown above the candidates; the
+                # plain "not found" would only contradict them.
+                "notes": (
+                    None if match.get("notes") == NOT_FOUND_NOTE
+                    else match.get("notes")
+                ),
             })
 
         if algo_lei:
@@ -769,7 +846,9 @@ def _partition(results: list) -> dict:
                     "notes": None,
                 })
 
-        if decision.get("status") == "none" or (not algo_lei and not closest):
+        if decision.get("status") == "none" or (
+            not algo_lei and not reviewable
+        ):
             no_match.append({
                 "searched": source.get("name") or source.get("isin"),
                 "country": source.get("country"),

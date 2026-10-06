@@ -15,6 +15,8 @@ from typing import Optional
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
+from .models import standing_decision
+
 #: Export column headers, in order.
 COLUMNS = [
     "Name",
@@ -81,9 +83,11 @@ def _answer_fields(row: dict) -> dict:
     A confirmed decision draws the answer (with the chosen candidate's
     scores and addresses); a "none" decision records an explicit reviewed
     no-match; with no decision the algorithmic match is used unchanged.
-    Every value is already stored - nothing is recomputed here.
+    Every value is already stored - nothing is recomputed here. A
+    decision that no longer stands (see core.models.standing_decision)
+    is ignored, as on the results page.
     """
-    decision = row.get("decision") or {}
+    decision = standing_decision(row)
 
     if decision.get("status") == "confirmed":
         candidate = _find_candidate(row, decision.get("lei"))

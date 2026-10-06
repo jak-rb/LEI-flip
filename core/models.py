@@ -57,6 +57,66 @@ class WarningCode(str, Enum):
     ADDRESS_CONTRADICTION = "ADDRESS_CONTRADICTION"
 
 
+def is_issued(status: Optional[str]) -> bool:
+    """Whether an LEI with this GLEIF status may be used: only ISSUED.
+
+    Any other status (LAPSED, RETIRED, MERGED, PENDING_TRANSFER, ...)
+    is a stop: such an LEI is shown for information, but never matched
+    or accepted, as it cannot be reported.
+
+    Args:
+        status: A GLEIF registration status, or None.
+
+    Returns:
+        True only for ISSUED (in any case).
+    """
+    return (status or "").strip().upper() == "ISSUED"
+
+
+def has_acceptable_candidate(closest: list) -> bool:
+    """Whether a stored row offers a candidate the user may accept.
+
+    A row with no algorithmic match is reviewed in the validation
+    stepper only then; candidates that are all stopped by their status
+    (see is_issued) leave nothing to decide, so the row is a no-match.
+
+    Args:
+        closest: The row's stored candidates (dicts).
+    """
+    return any(is_issued(candidate.get("status")) for candidate in closest)
+
+
+def standing_decision(row: dict) -> dict:
+    """A stored row's manual decision while it still stands, else {}.
+
+    A decision is taken only on a row without an algorithmic match that
+    offers a candidate to accept, and confirms only such a candidate
+    (see core/storage.record_decision). One saved before 2026-10-06 may
+    have confirmed an LEI that is not ISSUED, or sit on a row that now
+    offers nothing to accept: it no longer counts, so no stopped LEI
+    reaches the matched records or a download.
+
+    Args:
+        row: A stored result row.
+
+    Returns:
+        The row's decision dict, or {} when there is none that stands.
+    """
+    closest = row.get("closest") or []
+    if (row.get("match") or {}).get("lei"):
+        return {}
+    if not has_acceptable_candidate(closest):
+        return {}
+    decision = row.get("decision") or {}
+    if decision.get("status") == "confirmed":
+        chosen = next(
+            (c for c in closest if c.get("lei") == decision.get("lei")), None
+        )
+        if chosen is None or not is_issued(chosen.get("status")):
+            return {}
+    return decision
+
+
 def is_blank(text: Optional[str]) -> bool:
     """Whether a value holds no visible character.
 
@@ -169,9 +229,9 @@ class CandidateSummary(BaseModel):
     """A runner-up GLEIF candidate for the detail page's closest list.
 
     Carries the fields each validation row shows (name, country, city,
-    street, and an overall match percent) plus the supporting detail its
-    expandable section reveals (the per-field scores and the full legal
-    and HQ addresses).
+    the name, city and address scores, and the LEI status) plus the
+    supporting detail its expandable section reveals (the per-field
+    scores and the full legal and HQ addresses).
     """
 
     legal_name: str
@@ -180,14 +240,18 @@ class CandidateSummary(BaseModel):
     country: Optional[str] = None
     city: Optional[str] = None
     street: Optional[str] = None
-    #: Name-weighted (60/40) blend of name and address agreement, shown
-    #: as the row's overall match percent. Display-only: it never gates a
-    #: match (see core/lookup.py).
+    #: Name-weighted (60/40) blend of name and address agreement. No
+    #: longer shown (reviewers found it misleading), but kept: it orders
+    #: the candidates, and stored searches carry it.
     overall: float = 0.0
     name_score: float = 0.0
     city_score: float = 0.0
     street_score: float = 0.0
     zip_score: float = 0.0
+    #: Street and ZIP agreement, weighted as the matcher weighs them,
+    #: over the parts both sides carry; None when they share neither.
+    #: The review table's "Address" score; display-only.
+    address_score: Optional[float] = None
     legal_address: Optional[str] = None
     hq_address: Optional[str] = None
 

@@ -58,7 +58,7 @@ def _echo_lookup(entity, client):
     text = entity.name
     if "review" in text.lower():
         candidate = CandidateSummary(
-            legal_name=text, lei=REVIEW_LEI, status=text, country=text,
+            legal_name=text, lei=REVIEW_LEI, status="ISSUED", country=text,
             city=text, street=text, overall=61.0, legal_address=text,
             hq_address=text,
         )
@@ -158,7 +158,8 @@ def test_exports_drop_xml_illegal_characters(client, char):
 )
 def test_exports_drop_xml_illegal_characters_of_a_candidate(client, char):
     # A near-miss exports the lookup's notes; once the user confirms the
-    # candidate, its GLEIF name, status and addresses are exported.
+    # candidate, its GLEIF name and addresses are exported (its status
+    # is ISSUED: no other may be confirmed).
     expected = "Review Ltd" if char.isspace() else "ReviewLtd"
     job_id = _finished_job(client, entity_name=f"Review{char}Ltd")
     for rows in _exported_rows(client, job_id):
@@ -175,9 +176,9 @@ def test_exports_drop_xml_illegal_characters_of_a_candidate(client, char):
         assert (row["LEI"], row["Match_type"]) == (
             REVIEW_LEI, "MANUAL_MATCH",
         )
+        assert row["LEI_status"] == "ISSUED"
         for column in (
-            "LEI_status", "GLEIF_legal_name", "GLEIF_legal_address",
-            "GLEIF_hq_address",
+            "GLEIF_legal_name", "GLEIF_legal_address", "GLEIF_hq_address",
         ):
             assert row[column] == expected, column
 

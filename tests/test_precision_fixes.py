@@ -193,22 +193,25 @@ def test_a_live_lei_beats_its_dead_twin(dead_status, dead_first):
 
 @pytest.mark.parametrize("status", ["DUPLICATE", "CANCELLED"])
 def test_a_duplicate_lei_is_flagged_as_not_maintained(status):
+    # Never asserted (2026-10-06: anything but ISSUED is a stop), but
+    # still flagged as not maintained in the downloads.
     entity = InputEntity(
         name="ACME HOLDING a.s.", town="Praha", country="CZ",
     )
     client = _CannedGleif(
         [_candidate("ACME HOLDING a.s.", "D" * 20, status=status)],
     )
-    result, _ = lookup_module.lookup_entity(entity, client)
-    assert result.lei == "D" * 20
+    result, closest = lookup_module.lookup_entity(entity, client)
+    assert result.lei is None and result.lei_status == status
     assert "LAPSED_STATUS" in result.warnings
+    assert [(c.lei, c.status) for c in closest] == [("D" * 20, status)]
 
-    isin_only = lookup_module.lookup_entity(
+    isin_only, to_review = lookup_module.lookup_entity(
         InputEntity(isin=APPLE_ISIN),
         _CannedGleif(by_isin=[_candidate("ACME", "D" * 20, status=status)]),
-    )[0]
-    assert "LAPSED_STATUS" in isin_only.warnings
-    assert "(not maintained)" in isin_only.notes
+    )
+    assert isin_only.lei is None and status in isin_only.notes
+    assert [c.lei for c in to_review] == ["D" * 20]
 
 
 # ---- countries ----
@@ -316,7 +319,7 @@ def test_the_best_isin_hit_is_asserted_not_the_first():
     exact = _candidate("Alpha Holding a.s.", "E" * 20)
     client = _CannedGleif(by_isin=[weaker, exact])
     assert name_similarity(entity.name, weaker.legal_name) >= 50
-    result = isin_module.resolve_via_isin(entity, client)
+    result, _ = isin_module.resolve_via_isin(entity, client)
     assert result.lei == "E" * 20
 
 
@@ -341,8 +344,12 @@ def test_the_openfigi_fallback_keeps_to_the_given_country(monkeypatch):
     monkeypatch.setattr(
         isin_module, "resolve_isin_to_names", lambda *a, **k: ["ALPHA BANK"],
     )
-    entity = InputEntity(name="Alpha Bank", country="Greece", isin=RBI_ISIN)
-    result = isin_module.resolve_via_isin(
+    # The address agrees, as the fallback now requires (see
+    # tests/test_review_rules.py).
+    entity = InputEntity(
+        name="Alpha Bank", country="Greece", town="Athens", isin=RBI_ISIN,
+    )
+    result, _ = isin_module.resolve_via_isin(
         entity, _CannedGleif(by_name=_alpha_banks()),
     )
     assert result.lei == "G" * 20
@@ -353,10 +360,10 @@ def test_an_ambiguous_openfigi_fallback_asserts_nothing(monkeypatch):
     monkeypatch.setattr(
         isin_module, "resolve_isin_to_names", lambda *a, **k: ["ALPHA BANK"],
     )
-    entity = InputEntity(name="Alpha Bank", isin=RBI_ISIN)
+    entity = InputEntity(name="Alpha Bank", town="Athens", isin=RBI_ISIN)
     assert isin_module.resolve_via_isin(
         entity, _CannedGleif(by_name=_alpha_banks()),
-    ) is None
+    ) == (None, [])
 
 
 class _ByNameGleif(_CannedGleif):
@@ -485,11 +492,13 @@ def test_the_rival_check_blocks_a_name_that_clears_the_gate(monkeypatch):
 
 def test_an_equally_named_rival_leaves_the_openfigi_fallback(monkeypatch):
     # Only a better name blocks: both banks are named "Alpha Bank", and
-    # the one in the given country is still asserted.
+    # the one in the given country (and address) is still asserted.
     monkeypatch.setattr(
         isin_module, "resolve_isin_to_names", lambda *a, **k: ["ALPHA BANK"],
     )
-    entity = InputEntity(name="Alpha Bank", country="Greece", isin=RBI_ISIN)
+    entity = InputEntity(
+        name="Alpha Bank", country="Greece", town="Athens", isin=RBI_ISIN,
+    )
     result, _ = lookup_module.lookup_entity(
         entity, _CannedGleif(by_name=_alpha_banks()),
     )

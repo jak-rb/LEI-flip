@@ -89,7 +89,7 @@ def _store_review_job(count):
         {
             "input": {"name": f"entity {i}"},
             "match": {"lei": None},
-            "closest": [{"lei": _lei(i)}],
+            "closest": [{"lei": _lei(i), "status": "ISSUED"}],
         }
         for i in range(count)
     ]

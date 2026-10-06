@@ -115,32 +115,47 @@
                  data-chosen="{{ rec.decision.lei if rec.decision
                                  and rec.decision.status == 'confirmed'
                                  else '' }}">
+            {# Everything the row gave, so each candidate can be compared
+               with it: the name (or the ISIN), then each filled field. #}
+            {% set given = [
+                ('ISIN', 'ISIN', rec.input.isin if rec.input.name else None),
+                ('Country', 'Země', rec.input.country),
+                ('City', 'Město', rec.input.city),
+                ('Street', 'Ulice', rec.input.street),
+                ('Postal code', 'PSČ', rec.input.postal_code),
+            ] %}
             <p class="detail-searched">
                 <span data-cs="Hledali jste:" data-en="You searched:">You searched:</span>
                 <strong>{{ rec.input.name or rec.input.isin }}</strong>
-                {% set place = [rec.input.country or '',
-                                rec.input.city or '']
-                               |map('trim')|select|join(', ') %}
-                {% if place %}({{ place }}){% endif %}
+                {% for en, cs, value in given if value and value.strip() %}
+                <span class="searched-field"><span class="searched-label" data-en="{{ en }}" data-cs="{{ cs }}">{{ en }}</span> {{ value.strip() }}</span>
+                {% endfor %}
             </p>
+            {% if rec.notes %}
+            <p class="detail-note"
+               data-en="{{ rec.notes }}"
+               data-cs="{{ rec.notes|czech_note }}">{{ rec.notes }}</p>
+            {% endif %}
 
             <div class="results-table-wrap">
                 <table class="results-table candidates-table">
                     <thead>
                         <tr>
                             <th class="col-expand"></th>
-                            <th data-cs="Právní název" data-en="Legal name">Legal name</th>
+                            <th class="col-name" data-cs="Právní název" data-en="Legal name">Legal name</th>
                             <th data-cs="Země" data-en="Country">Country</th>
                             <th data-cs="Město" data-en="City">City</th>
-                            <th data-cs="Ulice" data-en="Street">Street</th>
+                            <th class="col-score" data-cs="Skóre názvu" data-en="Name score">Name score</th>
+                            <th class="col-score" data-cs="Skóre města" data-en="City score">City score</th>
+                            <th class="col-score" data-cs="Skóre adresy" data-en="Address score">Address score</th>
+                            <th data-cs="Stav LEI" data-en="LEI status">LEI status</th>
                             <th>GLEIF</th>
-                            <th class="col-overall" data-cs="Celková shoda" data-en="Overall match">Overall match</th>
                             <th class="col-confirm"></th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for c in rec.closest %}
-                        <tr class="candidate-row" data-lei="{{ c.lei }}">
+                        <tr class="candidate-row{% if not c.usable %} is-stopped{% endif %}" data-lei="{{ c.lei }}">
                             <td class="col-expand">
                                 <button type="button" class="candidate-expand"
                                         aria-expanded="false"
@@ -150,27 +165,44 @@
                                     <span class="chevron" aria-hidden="true"></span>
                                 </button>
                             </td>
-                            <td>{{ c.legal_name }}</td>
+                            <td class="col-name">{{ c.legal_name }}</td>
                             <td>{{ c.country }}</td>
                             <td>{{ c.city }}</td>
-                            <td>{{ c.street }}</td>
+                            {% for kind in ['name', 'city', 'address'] %}
+                            {% set score = c.scores[kind] %}
+                            <td class="col-score score-{{ score.state }}">{{ score.value if score.value is not none else '–' }}</td>
+                            {% endfor %}
+                            <td>
+                                {% if c.usable %}
+                                <span class="lei-status lei-status-ok">{{ c.status }}</span>
+                                {% else %}
+                                <span class="lei-status lei-status-stop"
+                                      title="This LEI cannot be used: for information only"
+                                      data-en-title="This LEI cannot be used: for information only"
+                                      data-cs-title="Toto LEI nelze použít: jen pro informaci"><span aria-hidden="true">!</span> {{ c.status }}</span>
+                                {% endif %}
+                            </td>
                             <td>
                                 <a class="gleif-link"
                                    href="https://search.gleif.org/#/record/{{ c.lei }}"
                                    target="_blank" rel="noopener"
                                    data-cs="Zobrazit ↗" data-en="View ↗">View &#8599;</a>
                             </td>
-                            <td class="col-overall">{{ c.overall|round|int }}%</td>
                             <td class="col-confirm">
+                                {% if c.usable %}
                                 <button type="button"
                                         class="btn candidate-confirm"
-                                        data-cs="Správná shoda" data-en="Correct match">
-                                    Correct match
+                                        data-cs="Přijmout" data-en="Accept">
+                                    Accept
                                 </button>
+                                {% else %}
+                                <span class="view-only"
+                                      data-cs="Jen k nahlédnutí" data-en="View only">View only</span>
+                                {% endif %}
                             </td>
                         </tr>
                         <tr class="candidate-detail" hidden>
-                            <td colspan="8">
+                            <td colspan="10">
                                 <dl class="candidate-detail-fields">
                                     <dt>LEI</dt>
                                     <dd class="cell-lei">{{ c.lei }}</dd>

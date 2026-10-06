@@ -50,11 +50,35 @@ _NOTE_TEMPLATES = [
     ),
     (
         "ISIN {isin} is not in GLEIF's authoritative mapping. OpenFIGI "
+        "resolved it to the issuer {figi_name}; the closest GLEIF "
+        "matches are listed for review.",
+        "ISIN {isin} není v autoritativním mapování GLEIF. Podle OpenFIGI "
+        "patří emitentovi {figi_name}; nejbližší shody z GLEIF jsou "
+        "uvedeny ke kontrole.",
+    ),
+    # The same note without the issuer's name, as written until
+    # 2026-10-06; it can go once those searches expire (2026-11-05).
+    (
+        "ISIN {isin} is not in GLEIF's authoritative mapping. OpenFIGI "
         "resolved it to an issuer name; the closest GLEIF matches are "
         "listed for review.",
         "ISIN {isin} není v autoritativním mapování GLEIF. OpenFIGI "
         "k němu našlo název emitenta; nejbližší shody z GLEIF jsou "
         "uvedeny ke kontrole.",
+    ),
+    (
+        "Name and legal address match {name} (LEI {lei}), but its LEI "
+        "status is {status} - the LEI cannot be used and was not "
+        "assigned.",
+        "Název i sídlo odpovídají subjektu {name} (LEI {lei}), ale LEI má "
+        "stav {status} - nelze ho použít a nebylo přiřazeno.",
+    ),
+    (
+        "ISIN {isin} maps in GLEIF to {name} (LEI {lei}), but its LEI "
+        "status is {status} - the LEI cannot be used and was not "
+        "assigned.",
+        "ISIN {isin} odpovídá v GLEIF subjektu {name} (LEI {lei}), ale "
+        "LEI má stav {status} - nelze ho použít a nebylo přiřazeno.",
     ),
     (
         "ISIN {isin} found in GLEIF; LEI assigned despite the address "
@@ -74,6 +98,50 @@ _NOTE_TEMPLATES = [
         "Silná shoda názvu ({score} %) se subjektem {name}. ISIN {isin} "
         "potvrzuje LEI.",
     ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}; the "
+        "LEI was found in GLEIF by that name, not by the ISIN, and its "
+        "legal address matches the one given.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name}; LEI bylo "
+        "v GLEIF nalezeno podle tohoto názvu, ne podle ISIN, a sídlo "
+        "odpovídá zadané adrese.",
+    ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}; the "
+        "LEI was found in GLEIF by that name, not by the ISIN, and its "
+        "headquarters address matches the one given.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name}; LEI bylo "
+        "v GLEIF nalezeno podle tohoto názvu, ne podle ISIN, a adresa "
+        "centrály odpovídá zadané adrese.",
+    ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}, and "
+        "GLEIF has {name} under that name, but its address does not "
+        "match the one given - LEI not assigned. Please review.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name} a GLEIF "
+        "pod tímto názvem vede subjekt {name}, jeho adresa ale "
+        "neodpovídá zadané - LEI nebylo přiřazeno. Zkontrolujte ho "
+        "prosím.",
+    ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}, and "
+        "GLEIF has {name} (LEI {lei}) under that name, but its LEI status "
+        "is {status} - the LEI cannot be used and was not assigned.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name} a GLEIF "
+        "pod tímto názvem vede subjekt {name} (LEI {lei}), LEI má ale stav "
+        "{status} - nelze ho použít a nebylo přiřazeno.",
+    ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}, and "
+        "GLEIF has {name} under that name, but no address was given to "
+        "check it against - LEI not assigned. Please review.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name} a GLEIF "
+        "pod tímto názvem vede subjekt {name}, k ověření ale nebyla "
+        "zadána adresa - LEI nebylo přiřazeno. Zkontrolujte ho prosím.",
+    ),
+    # The same match as noted until 2026-10-06, before the OpenFIGI
+    # path checked the address; it can go once those searches expire
+    # (2026-11-05).
     (
         "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}; the "
         "LEI was found in GLEIF by that name, not by the ISIN.",
@@ -138,7 +206,9 @@ _NOTE_TEMPLATES = [
 ]
 
 # The sentence some notes end with when the LEI is not maintained: the
-# HQ-only near-miss adds the first, the ISIN matches the second.
+# HQ-only near-miss adds the first; the ISIN matches added the second
+# until 2026-10-06, when they stopped asserting any LEI but an ISSUED
+# one, and the searches stored by then keep it (until 2026-11-05).
 _STATUS_TEMPLATES = [
     (" LEI status: {status}.", " Stav LEI: {status}."),
     (

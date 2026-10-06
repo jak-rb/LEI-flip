@@ -50,6 +50,11 @@ STREET_MATCH_THRESHOLD = 55
 #: by the assert below.
 AMBIGUOUS_NAME_CAP = 70.0
 
+#: Minimum address score (0-100) for an address to corroborate a name:
+#: with a city of at least CITY_MATCH_THRESHOLD, the gate of a full
+#: match and of the address check on the OpenFIGI path.
+ADDRESS_CORROBORATION_MIN = 40
+
 #: Minimum score for a significant token to count as "covered" by a
 #: counterpart token on the other side.
 TOKEN_COVER_THRESHOLD = 85

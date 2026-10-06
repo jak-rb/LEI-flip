@@ -9,6 +9,7 @@ from rapidfuzz import fuzz
 from .address import (
     country_to_iso,
     extract_zip,
+    is_legal_form,
     normalize_address_part,
     normalize_name,
 )
@@ -53,32 +54,86 @@ _SERIAL_WORDS = frozenset({
 })
 
 
+def _is_letter(word: str) -> bool:
+    """Whether a word is a single letter, as initials leave them."""
+    return len(word) == 1 and word.isalpha()
+
+
+def _initials_run(words: list[str], start: int) -> tuple[int, bool]:
+    """The run of single letters at ``start``: its end, and if initials.
+
+    Two or more single letters in a row ("F.D." normalizes to "f d")
+    are initials, as in "EURO F.D. HOLDINGS", and tell that entity
+    apart from "Euro Holdings" exactly as a word would. Not initials,
+    so read letter by letter as before, are a run that spells a legal
+    form the patterns did not strip ("P.L.C." in mid-name, "a.s.;") and
+    a run with nothing after it but more letters and connectives: a
+    legal form the list does not know ("..., L.P.", "Citibank, N.A.",
+    "S.A.B. de C.V.").
+    """
+    end = start
+    while end < len(words) and _is_letter(words[end]):
+        end += 1
+    letters = words[start:end]
+    trailing = all(
+        _is_letter(word) or word in _NAME_STOPWORDS for word in words[end:]
+    )
+    initials = not (
+        len(letters) < 2 or trailing
+        or is_legal_form("".join(letters))
+        or is_legal_form(".".join(letters) + ".")
+    )
+    return end, initials
+
+
 def _significant_tokens(normalized: str) -> list[str]:
     """Entity-distinguishing tokens of an already-normalized name."""
-    # Single-character fragments are dropped EXCEPT serials: serially
-    # numbered entity families ("Tesco Property Finance 1 PLC" vs "3
-    # PLC", "Fund V" vs "Fund X", "Trust 2023-A" vs "2023-B") are told
-    # apart ONLY by that serial, so dropping it would collapse them into
-    # a confident wrong match. A digit-bearing token, a roman I/V/X and
-    # a letter right after a number or a serial word are kept - even
-    # "a", otherwise a stopword. The cost: a Czech "v" or Polish "i" on
-    # one side only now counts as distinguishing, which gives NO_MATCH
-    # with details, never a wrong LEI. Legal forms are removed upstream.
-    cleaned = normalized.replace("&", " and ").replace("-", " ")
+    # Single-character fragments are dropped EXCEPT serials and
+    # initials: serially numbered entity families ("Tesco Property
+    # Finance 1 PLC" vs "3 PLC", "Fund V" vs "Fund X", "Trust 2023-A" vs
+    # "2023-B") are told apart ONLY by that serial, so dropping it would
+    # collapse them into a confident wrong match. A digit-bearing token,
+    # a roman I/V/X and a letter right after a number or a serial word
+    # are kept - even "a", otherwise a stopword. The cost: a Czech "v"
+    # or Polish "i" on one side only now counts as distinguishing, which
+    # gives NO_MATCH with details, never a wrong LEI. Initials inside a
+    # name are kept as one token (see _initials_run). Legal forms are
+    # removed upstream.
+    # Initials are looked for before "&" is spelled out, so the letters
+    # of "J&T" or "AT&T" never join a run.
+    words = normalized.replace("-", " ").split()
     tokens = []
     previous = ""
-    for token in cleaned.split():
-        serial_letter = len(token) == 1 and token.isalpha() and (
-            any(c.isdigit() for c in previous) or previous in _SERIAL_WORDS
-        )
-        previous = token
-        if serial_letter or token in _ROMAN_SINGLE:
-            tokens.append(token)
-        elif token in _NAME_STOPWORDS:
-            continue
-        elif len(token) >= 2 or any(c.isdigit() for c in token):
-            tokens.append(token)
+    index = 0
+    while index < len(words):
+        if _is_letter(words[index]) and not _after_serial(previous):
+            end, initials = _initials_run(words, index)
+            if initials:
+                tokens.append("".join(words[index:end]))
+                previous = words[end - 1]
+                index = end
+                continue
+            # Not initials: each letter of the run on its own, as before.
+            chunk = words[index:end]
+            index = end
+        else:
+            chunk = [words[index]]
+            index += 1
+        for token in " ".join(chunk).replace("&", " and ").split():
+            serial_letter = _is_letter(token) and _after_serial(previous)
+            previous = token
+            if serial_letter or token in _ROMAN_SINGLE:
+                tokens.append(token)
+            elif token in _NAME_STOPWORDS:
+                continue
+            elif len(token) >= 2 or any(c.isdigit() for c in token):
+                tokens.append(token)
     return tokens
+
+
+def _after_serial(previous: str) -> bool:
+    """Whether a letter after this token is a serial ("2023-A", "Fund B")."""
+    return any(c.isdigit() for c in previous) or previous in _SERIAL_WORDS
 
 
 def _token_covered(token: str, others: list[str]) -> bool:
@@ -121,6 +176,12 @@ def name_similarity(input_name: str, gleif_name: str) -> float:
     s1 = n1.replace("&", " and ").replace("-", " ")
     s2 = n2.replace("&", " and ").replace("-", " ")
 
+    # The same letters spaced differently ("J.P. Morgan" and "JPMorgan",
+    # "EuroHoldings" and "Euro-Holdings") are the same name, whatever
+    # tokens the spacing makes.
+    if s1.replace(" ", "") == s2.replace(" ", ""):
+        return 100.0
+
     # token_set_ratio handles reordering; ratio handles spelling
     # closeness. partial_ratio is excluded - it is the substring bug.
     base = float(max(fuzz.token_set_ratio(s1, s2), fuzz.ratio(s1, s2)))
@@ -160,6 +221,33 @@ def best_name_score(entity: InputEntity, candidate: GleifCandidate) -> float:
         scores.append(name_similarity(entity.name, other_name))
 
     return max(scores)
+
+
+def shares_name_word(input_name: str, candidate: GleifCandidate) -> bool:
+    """Whether a candidate's names share a distinctive word with input.
+
+    A candidate whose name agrees only in its legal form ("FISS, spol.
+    s r.o." and "BRŮZA spol. s r.o.") or in connectives is no near-miss
+    at all, so the review offers only candidates that pass this. An
+    input with no distinctive word left (only a legal form) passes
+    everything, as before.
+
+    Args:
+        input_name: The user-provided entity name.
+        candidate: A GLEIF candidate record.
+
+    Returns:
+        True if a significant token of the input has a fuzzy
+        counterpart among those of the candidate's legal or other names.
+    """
+    wanted = _significant_tokens(normalize_name(input_name))
+    if not wanted:
+        return True
+    for name in (candidate.legal_name, *candidate.other_names):
+        tokens = _significant_tokens(normalize_name(name))
+        if any(_token_covered(token, tokens) for token in wanted):
+            return True
+    return False
 
 
 def city_similarity(

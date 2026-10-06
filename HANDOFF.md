@@ -1,9 +1,11 @@
 # Handoff - 2026-10-06
 
-Where the 2026-10-06 session left off, for the next one. Like the former
+Where the 2026-10-06 sessions left off, for the next one. Like the former
 HANDOFF.md, retire this file once its open items are settled.
 
 ## Done (branch `vercel`, all deployed to production)
+
+Morning:
 
 | Commit | Change |
 |---|---|
@@ -12,9 +14,36 @@ HANDOFF.md, retire this file once its open items are settled.
 | `042e3e2` | The results page flags a GLEIF street "c/o" someone as "Agent's address (c/o)": for many US companies GLEIF has only their registered agent (FIRY: CSC in Wilmington, as legal and HQ address). Page only; the downloads are unchanged. |
 | `f23b9b4` | The OpenFIGI fallback holds the typed name to the usual gate of 75 (OpenFIGI's own name keeps its 65). |
 
-792 tests pass, and the offline replay is unchanged by all four.
+Afternoon: the reviewers' feedback (the last ten minutes of a status
+meeting's recording, and an e-mail of annotated screenshots) in one
+commit (see `git log`):
 
-## How the last two were checked
+- Only an ISSUED LEI is ever matched or accepted. Any other status is a
+  stop on every path: shown in red with "!", "View only" instead of
+  Accept, refused by `/api/decision`; a row whose candidates are all
+  stopped is a no-match whose note names the LEI and its status.
+- The OpenFIGI path asserts only when the address given agrees with the
+  candidate's legal or HQ address; otherwise the row goes to review, the
+  note naming the issuer OpenFIGI gave.
+- Names: Czech "spol. s r.o." / "a. s." / "společnost s ručením
+  omezeným" forms are stripped; review candidates must share a
+  distinctive word with the name (not just "spol. s r.o."); initials
+  inside a name ("EURO F.D. HOLDINGS") tell names apart.
+- Stepper: "You searched" shows every field given (ISIN, street, ZIP
+  too), a note says why the row was not matched, and the table shows
+  name / city / address scores (green, red, or a dash) and the LEI status
+  instead of the street and the overall percent; "Correct match" is now
+  "Accept".
+
+Checks: 846 tests; offline replay identical to its expectation (only junk
+review candidates dropped); a live replay of the 62 real ISIN rows (the
+59 below plus the e-mail's) changed no LEI and added no match, while 7
+rows left Matched, each for a new rule (Billington, LIPOCINE, Nova
+Minerals: LAPSED; Redwire, FIRY x3: OpenFIGI address). The live run
+also found that skipping stopped records weakened the OpenFIGI
+fallback's ambiguity check ("X-Energy Inc"); they count there again.
+
+## How the morning's last two were checked
 
 The offline replay never reaches the OpenFIGI fallback (none of its 340
 cases ends there), so a live replay was added in the gitignored
@@ -33,20 +62,29 @@ For the user:
 - Tell the colleague who searched "Genius Sports Ltd." on 2026-10-06 that
   the LEI they got is wrong (above). Their stored search keeps it until
   they search again.
+- Searches stored before the afternoon's change keep their old verdicts
+  (a LAPSED LEI or an OpenFIGI name match in Matched records) until they
+  are searched again or expire (by 2026-11-05); only decisions on stopped
+  candidates are ignored on the page and in the downloads. Reviewers
+  should search their test files again.
+- The reviewers asked whether the tool could look an issuer's address up
+  on the web (from the OpenFIGI name) to check it: that needs an LLM or a
+  web-search service, which they understood is not possible in CodeNOW.
+  OpenFIGI itself gives no addresses.
+- The matched-records table still shows the overall percent (the
+  confidence). The reviewers dropped it from the candidate table only;
+  ask whether it should go there too.
 
 Candidates for a next session:
-1. Recall on real ISIN rows: 45 of the 59 end without a match, 24 of them
-   with candidates to review, and 34 say "No LEI found in the GLEIF
+1. Recall on real ISIN rows: now 9 of the 62 are matched, 21 go to review
+   and 32 end without a match, many saying "No LEI found in the GLEIF
    database" (mostly US small caps and funds). Find out which have an LEI
    at all and why the rest are missed (renamed issuers, OpenFIGI's names,
-   Japanese legal names such as Nomura's). Data:
-   `docs/live-replay/replay_results_2026-10-06.json`. Any matcher change
-   needs the offline replay, then the live replay.
-2. "Investec Fund Series" (GB00B12GL767) is matched through GLEIF's ISIN
-   data to "GLOBAL GOLD FUND", a sub-fund, at a name score of 62.7 (the
-   direct ISIN path accepts 50). Arguable rather than wrong, as the user
-   named the umbrella; decide whether that path should assert so loose a
-   name.
+   Japanese legal names such as Nomura's). Any matcher change needs the
+   offline replay, then the live replay.
+2. ~~"Investec Fund Series" matched to its sub-fund through GLEIF's ISIN
+   data~~ settled by the reviewers: a GLEIF ISIN hit stands even when the
+   address differs; only the OpenFIGI path must check the address.
 3. `main` and `codenow` (the CodeNOW layout) have none of the fixes since
    2026-09-24. The desktop app's "Create PR" (`vercel` into `main`) must
    not be merged, as the layouts differ; port the fixes only if the

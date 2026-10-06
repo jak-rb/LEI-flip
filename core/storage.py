@@ -26,6 +26,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
+from .models import has_acceptable_candidate, is_issued
+
 logger = logging.getLogger(__name__)
 
 #: Postgres connection string. The Neon integration sets DATABASE_URL
@@ -400,7 +402,8 @@ def record_decision(
         The saved decision dict, or None if the job is missing or still
         running, the index is out of range, the row has nothing to
         validate, the LEI is not one of that entity's stored
-        candidates, or rival writes won every attempt.
+        candidates with an ISSUED LEI, or rival writes won every
+        attempt.
     """
     if not _is_job_id(job_id) or not isinstance(index, int):
         return None
@@ -438,15 +441,22 @@ def _apply_decision(
     if len(results) < len(query) or not (0 <= index < len(results)):
         return None
     row = results[index]
-    # The detail page's to-validate test (app._partition): candidates,
-    # but no algorithmic match.
-    if (row.get("match") or {}).get("lei") or not row.get("closest"):
+    # The detail page's to-validate test (app._partition): no
+    # algorithmic match, and a candidate the user may accept.
+    closest = row.get("closest") or []
+    if (row.get("match") or {}).get("lei") or not has_acceptable_candidate(
+        closest
+    ):
         return None
     if choice == "none":
         decision = {"status": "none"}
     else:
-        candidate_leis = {c.get("lei") for c in row["closest"]}
-        if choice not in candidate_leis:
+        # Only an ISSUED LEI may be accepted: any other is shown only to
+        # be seen (see core.models.is_issued).
+        acceptable = {
+            c.get("lei") for c in closest if is_issued(c.get("status"))
+        }
+        if choice not in acceptable:
             return None
         decision = {"status": "confirmed", "lei": choice}
     row["decision"] = decision

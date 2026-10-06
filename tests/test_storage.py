@@ -20,7 +20,7 @@ def _row(lei=None, closest=()):
     return {
         "input": {"name": "x"},
         "match": {"lei": lei},
-        "closest": [{"lei": c} for c in closest],
+        "closest": [{"lei": c, "status": "ISSUED"} for c in closest],
     }
 
 

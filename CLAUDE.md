@@ -170,6 +170,7 @@ core/              # backend lookup logic (ported + simplified from the original
   openfigi.py      # OpenFIGI client: ISIN -> issuer name(s) (ISIN fallback)
   storage.py       # search store: one `searches` table on Postgres or SQLite
   export.py        # build CSV / Excel from a search (reflects manual decisions)
+  notes.py         # Czech versions of the lookup notes, for the results page
   upload.py        # parse an uploaded .xlsx/.csv/.tsv/.txt, or pasted rows, into entities
 data/              # read-only lookup tables (committed)
   country_mapping.json  # country name (cs/en/native) -> ISO alpha-2 code
@@ -346,7 +347,15 @@ best candidate whose name clears the usual 75 against the typed name (65
 against OpenFIGI's, often cut short). It asked only 65 of the typed name
 until 2026-10-06, when a live replay of real searches found a lapsed "GENIUS
 SPORTS MEDIA INC." (70) asserted for "Genius Sports Ltd.", which GLEIF lacks.
-A match that fallback makes is typed
+OpenFIGI's name only finds that candidate: it is asserted only when the
+address given agrees with its legal or HQ address (the full-match gate,
+`core/isin._address_agrees`; an HQ agreement adds `HQ_ONLY_MATCH`), and
+otherwise goes to review - a NO_MATCH whose note names the issuer
+OpenFIGI gave, with the candidate offered in the stepper even when the
+name search lacked it (`resolve_via_isin` returns `(result, to_review)`).
+Reviewers asked for that on 2026-10-06 (Redwire Corporation: GLEIF has
+only its Delaware agent as legal address). A match that fallback makes is
+typed
 `ISIN_OPENFIGI_MATCH` and flagged `ISIN_VIA_OPENFIGI` ("ISIN via OpenFIGI"),
 not "Matched by ISIN", and its note says the LEI was found in GLEIF by the
 issuer name: GLEIF may have no record of the ISIN (a user checking FIRY INC
@@ -354,8 +363,25 @@ there found none, 2026-10-06). An ISIN mapping to several LEIs offers
 them in the stepper. The ISIN-based matches flag `COUNTRY_MISMATCH` or
 `COUNTRY_UNVERIFIED` unless the given country is recognised and is the
 record's; every other match flags `COUNTRY_UNVERIFIED` for a missing or
-unrecognised country. Among full matches within the ambiguity band a
-maintained LEI beats a dead twin (`core/lookup._finalize_full_match`).
+unrecognised country. **Only an ISSUED LEI is ever asserted**
+(`core.models.is_issued`): any other status (LAPSED, RETIRED, MERGED,
+PENDING_TRANSFER...) is a stop on every path - the reviewers' rule of
+2026-10-06, "anything other than issued ... is only for looking". A full
+match on such an LEI becomes a NO_MATCH whose note names it and its
+status (`core/lookup._not_usable_no_match`), a live LEI beats its dead
+twin with `AMBIGUOUS_MATCH` (`_finalize_full_match`), and the ISIN paths
+skip stopped records; an ISIN-only search mapped to one, or an OpenFIGI
+best candidate that is one, says so in its note and offers it to be
+seen. A stopped record still counts in the OpenFIGI fallback's
+ambiguity check (the live replay's "X-Energy Inc": a LAPSED twin of an
+Italian "X ENERGY S.R.L." keeps the live one from being asserted).
+Review candidates must share a distinctive word with the searched name
+(`core/matcher.shares_name_word`): a name agreeing only in its legal form
+("FISS, spol. s r.o." / "BRŮZA spol. s r.o.") is no near-miss. A run of
+initials inside a name ("EURO F.D. HOLDINGS") is a distinguishing token,
+while a trailing run or one spelling a legal form ("..., L.P.", "N.A.",
+"P.L.C.") is dropped as before, and names equal but for spacing ("J.P.
+Morgan" / "JPMorgan") score 100 (`core/matcher._initials_run`).
 
 **The store** (`core/storage.py`) is one `searches` table: `job_id`,
 `created_at` (ISO-8601 UTC text), `mode`, `searched` (entities looked up so
@@ -386,7 +412,7 @@ statements off.
 **The `/results` page, decisions and downloads** work as before: a summary
 card with the four counts (Searched `x / total`, Matched, Need validation,
 Unmatched), the orange validation stepper (top 3 candidates per near-miss,
-confirm one or "None of these", saved via `POST /api/decision` ->
+**Accept** one or "None of these", saved via `POST /api/decision` ->
 `storage.record_decision`), the matched and no-match tables, and the CSV /
 Excel downloads built by `core/export.py` (the CSV starts with a UTF-8
 byte-order mark, so Excel does not read it as cp1250; a confirmed pick
@@ -412,10 +438,24 @@ from the template's `flag_labels`; a match through the ISIN also shows its
 note there, saying how it was made, and a GLEIF street "c/o" an agent (for
 many US companies GLEIF has only their registered agent's office, CSC's in
 Wilmington for FIRY INC) gets the page's own "Agent's address (c/o)" flag
-(`app._display_flags`), as a searched address rarely matches it. The overall
-percent shown
-per candidate is display-only (`core/lookup._overall_match`) and never gates
-a match.
+(`app._display_flags`), as a searched address rarely matches it.
+The stepper follows the reviewers' sketch of 2026-10-06: "You searched"
+lists every field the row gave (ISIN, country, city, street, postal
+code); a note says why the row was not matched (not the plain "not
+found"); and each candidate shows legal name, country, city, its name,
+city and address scores (`app._review_candidate`: green at the matcher's
+gate, red under it, a dash with nothing to compare; the address score is
+street and ZIP agreement, `core/lookup._street_zip_score`, stored as
+`CandidateSummary.address_score`), its LEI status, a GLEIF link and
+**Accept** (was "Correct match", which read as a verdict). The street and
+the overall percent are gone from the table (the overall still orders
+the candidates). A candidate whose LEI is not ISSUED shows a red "!"
+status and "View only" instead of Accept, and `record_decision` refuses
+it; a row is "to validate" only with a candidate it may accept
+(`core.models.has_acceptable_candidate`), so a row whose candidates are
+all stopped is a no-match, and a decision saved before 2026-10-06 that
+no longer stands (`core.models.standing_decision`) is ignored on the
+page and in the downloads alike.
 
 ### Frontend
 
@@ -443,8 +483,9 @@ a match.
   once the results page is on its way (re-enabled on a back-forward
   cache restore), and an explicit theme choice stops the page following
   the OS scheme. `tests/test_frontend.py` drives these in Node.
-- **Phones.** Below 700 px the stepper's Overall/Confirm columns are not
-  pinned, as the two covered the whole table at 375 px.
+- **Phones.** Below 700 px the stepper's Accept column is not pinned, as
+  it covered much of the table at 375 px. On a desktop the candidate
+  table fits without scrolling: legal names and score headers wrap.
 
 ### Deployment (Vercel)
 
@@ -467,8 +508,22 @@ a match.
 
 ### Current state
 
-Open items of the 2026-10-06 session, and what a next session could take
+Open items of the 2026-10-06 sessions, and what a next session could take
 up, are in `HANDOFF.md`.
+
+On 2026-10-06 (afternoon) the reviewers' feedback (a meeting recording and
+an e-mail of annotated screenshots) was implemented: only ISSUED LEIs are
+ever matched or accepted, the OpenFIGI path checks the address, Czech
+"spol. s r.o." forms are stripped, initials distinguish names, review
+candidates must share a distinctive word with the name, and the stepper
+shows the whole searched row, name/city/address scores and the LEI
+status, with Accept (details under Backend). Checked by the offline
+replay (unchanged: 1 wrong LEI, 105/109 pairs; only junk review
+candidates dropped, review rows 149 -> 143) and by a live replay of the
+62 real ISIN rows (the 59 of the earlier live replay plus the e-mail's):
+no row gained a match and no LEI changed; 7 left Matched, each for a new
+rule (3 LAPSED LEIs, 4 OpenFIGI names whose address did not agree), and
+FISS lost its three legal-form-only candidates.
 
 The 2026-09-23 test run's backlog (the former `HANDOFF.md`) is done: every
 confirmed defect was fixed test-first, re-verified by an adversarial pass,
@@ -518,11 +573,12 @@ validation workflow and the CSV/Excel downloads are real. `tests/` covers the
 store and the route flows with GLEIF faked; run it before every change to the
 web layer. Matching behaviour (thresholds in `core/constants.py`) is
 audit-validated and unchanged from the CodeNOW version apart from the
-legal-form whitespace, the 2026-09-30 precision fixes and the OpenFIGI
+legal-form whitespace, the 2026-09-30 precision fixes, the OpenFIGI
 fallback's rival check and name gate (2026-10-06: offline replay unchanged;
 a live replay of the 59 ISIN rows searched in the 30 days before changed only
-the Genius Sports row) above - re-run the matcher audit (at least the offline
-replay) before tuning it. The offline replay never reaches the OpenFIGI
+the Genius Sports row) and the reviewers' rules of the same afternoon
+above - re-run the matcher audit (at least the offline replay) before
+tuning it. The offline replay never reaches the OpenFIGI
 fallback; the gitignored `docs/live-replay/` replays real searches live
 (GLEIF and OpenFIGI calls: ask the user first).
 
