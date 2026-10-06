@@ -181,6 +181,22 @@ def test_a_shared_legal_form_adds_nothing_to_a_name_score(other):
     ("N.A. Capital Partners LLC", "Capital Partners LLC"),
     # A legal form left by a lone letter is no initial to join.
     ("Firma B a. s.", "FIRMA BAS a.s."),
+    # A lone letter tells siblings apart (third round).
+    ("Projekt Alfa B s. r. o., odštěpný závod",
+     "Projekt Alfa C, s.r.o., odštěpný závod"),
+    ("Firma B a. s., odštěpný závod", "Firma C a.s., odštěpný závod"),
+    ("Rezidence B s. r. o. v likvidaci", "Rezidence C s.r.o. v likvidaci"),
+    ("Rezidence B s.r.o. v likvidaci", "Rezidence C s.r.o. v likvidaci"),
+    ("XY B k. s. Brno", "XY C k.s. Brno"),
+    ("Alpha Holding A s.r.o.", "Alpha Holding B s.r.o."),
+    ("J K. S. Group", "Group"),
+    # Names of letters and "&" alone are not confirmed by their spelling
+    # closeness (third round).
+    ("M & M s. r. o.", "M & N s.r.o."),
+    ("M&M s.r.o.", "M&N s.r.o."),
+    ("H & B a. s.", "H & K a.s."),
+    ("A.B.C. s.r.o.", "A.B.D. s.r.o."),
+    ("AT&T Inc.", "AT&S AG"),
     # Fund types of one company still tell its funds apart.
     ("Indexovy negarantovany a.d.f. UNIQA",
      "Indexovy negarantovany i.d.f. UNIQA"),
@@ -219,6 +235,10 @@ def test_initials_tell_names_apart(searched, other):
     # A former OJSC / CJSC is the same JSC (second round).
     ("OJSC Halyk Bank", "JSC Halyk Bank"),
     ("CJSC Alfa Bank", "JSC Alfa Bank"),
+    # A lone letter of the same name, and a company in liquidation
+    # (third round).
+    ("Hotel U Zlaté Hrušky s.r.o.", "HOTEL U ZLATE HRUSKY s.r.o."),
+    ("XYZ a.s. v likvidaci", "XYZ a.s."),
 ])
 def test_initials_and_spacing_of_the_same_name_still_match(searched, other):
     assert name_similarity(searched, other) == 100
@@ -914,4 +934,44 @@ def test_a_note_and_the_table_show_one_name_score():
         {"name": entity.name}, closest[0].model_dump(),
     )["scores"]["name"]["value"]
     assert f"Strong name match ({shown}%)" in result.notes
+
+
+# ---- found by the third review round of 2026-10-06 ----
+
+def test_a_sibling_named_by_its_letter_is_not_asserted():
+    # Same town and address, the true "M & M" missing from GLEIF: the
+    # sibling "M & N" scored 88.9 and was asserted.
+    entity = InputEntity(name="M & M s. r. o.", country="CZ", town="Brno")
+    sibling = _candidate("M & N s.r.o.", "N" * 20, city="Brno")
+    result, _ = lookup_module.lookup_entity(entity, _CannedGleif([sibling]))
+    assert result.lei is None
+
+
+@pytest.mark.parametrize("order", ["stopped first", "issued first"])
+def test_the_review_offers_the_record_its_note_names(order):
+    # An HQ-only near-miss on H among same-named records: the review
+    # must offer H itself, not only another same-named LEI.
+    entity = InputEntity(
+        name="Alpha Holdings s.r.o.", country="CZ", town="Praha",
+        street="Vodickova 5", zip_code="11000",
+    )
+    name = "Alpha Holdings s.r.o."
+    hq = _candidate(name, "H" * 20, city="Kladno", street="Smetanova 3",
+                    zip_code="27201",
+                    hq=_address("CZ", "Praha", "Vodickova 5", "11000"))
+    if order == "stopped first":
+        others = [
+            _candidate(name, "1" * 20, city="Brno", status="LAPSED"),
+            _candidate(name, "2" * 20, city="Ostrava", status="RETIRED"),
+            _candidate(name, "3" * 20, city="Plzen", status="DUPLICATE"),
+            _candidate(name, "Y" * 20, city="Liberec"),
+        ]
+    else:
+        others = [_candidate(name, f"{n}" * 20, city="Liberec")
+                  for n in (4, 5, 6)]
+    result, closest = lookup_module.lookup_entity(
+        entity, _CannedGleif([*others, hq]),
+    )
+    assert "matches only the headquarters" in result.notes
+    assert "H" * 20 in [c.lei for c in closest]
 

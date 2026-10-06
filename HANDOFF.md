@@ -58,7 +58,13 @@ A second round (fix confirmers plus fresh reviewers of the fix diff)
 found two of them only partly fixed and six slips in the fixes (two of
 them new wrong-LEI paths: "L.P. Holdings" scoring 100 against "Holdings"
 and "Firma B a. s." against "FIRMA BAS a.s."); all fixed in a fourth
-commit, again test-first (891 tests).
+commit, again test-first (891 tests). A third round on that commit's
+diff found three more, older holes it had widened: a lone letter
+dropped as noise ("Firma B a. s." vs "Firma C a.s." asserted), names
+of only letters and "&" scored by an uncapped fallback ("M & M s. r.
+o." vs "M & N s.r.o." asserted), and a review that could offer another
+same-named LEI than the one its note named; fixed in a fifth commit
+(908 tests; offline replay and the 62 real rows unchanged).
 
 ## How the morning's last two were checked
 

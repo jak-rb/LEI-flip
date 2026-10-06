@@ -149,7 +149,14 @@ def _significant_tokens(normalized: str) -> list[str]:
                 tokens.append(token)
             elif token in _NAME_STOPWORDS:
                 continue
-            elif len(token) >= 2 or any(c.isdigit() for c in token):
+            # A letter standing alone ("Firma B a. s.", the letters of
+            # "M&M") tells siblings apart as a word would; only letters
+            # of a run that is no initials (a legal form, a trailing
+            # "N.A.") are dropped.
+            elif (
+                len(token) >= 2 or any(c.isdigit() for c in token)
+                or len(chunk) == 1 and token.isalpha()
+            ):
                 tokens.append(token)
     return tokens
 
@@ -217,9 +224,11 @@ def name_similarity(input_name: str, gleif_name: str) -> float:
     t1 = _significant_tokens(n1)
     t2 = _significant_tokens(n2)
     if not t1 or not t2:
-        # One side reduced to only connectives/legal forms - fall back
-        # to the plain string ratio, conservative for such inputs.
-        return float(fuzz.ratio(s1, s2))
+        # One side reduced to only connectives/legal forms: nothing on it
+        # can confirm the name, so the plain string ratio is capped below
+        # the gate like any unconfirmed pair ("M & M" was 88.9 alike to
+        # "M & N"). The same name spelled otherwise passed above.
+        return min(float(fuzz.ratio(s1, s2)), AMBIGUOUS_NAME_CAP)
 
     uncovered = [t for t in t1 if not _token_covered(t, t2)]
     uncovered += [t for t in t2 if not _token_covered(t, t1)]

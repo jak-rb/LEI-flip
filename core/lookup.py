@@ -255,10 +255,16 @@ def _lookup(
         logger.info("No GLEIF candidates for %s", entity.name)
         result, to_review = resolve_via_isin(entity, client)
         result = result or _no_match(NOT_FOUND_NOTE)
-        return result, _closest_candidates(entity, to_review, result.lei)
+        return result, _closest_candidates(
+            entity, to_review, result.lei,
+            pinned=to_review[0].lei if to_review else None,
+        )
 
     result, to_review = _classify_candidates(entity, candidates, client)
-    closest = _closest_candidates(entity, to_review + candidates, result.lei)
+    closest = _closest_candidates(
+        entity, to_review + candidates, result.lei,
+        pinned=to_review[0].lei if to_review else None,
+    )
     return result, closest
 
 
@@ -268,8 +274,12 @@ def _classify_candidates(
     """Score the candidates and return the precision-first verdict.
 
     Returns:
-        The verdict, and the candidates the ISIN paths found that the
-        name search may lack (the OpenFIGI fallback's, left for review).
+        The verdict, and the candidates to keep in the review: first the
+        record a NO_MATCH verdict is about, if any (a stopped full match,
+        the OpenFIGI fallback's candidate, an HQ-only or name-only
+        near-miss), which the review then always offers, as its note
+        names it; the OpenFIGI fallback's may be one the name search
+        lacks.
     """
     full_matches: list[LookupResult] = []
     best_hq_candidate: Optional[GleifCandidate] = None
@@ -380,7 +390,8 @@ def _classify_candidates(
     # status (see core.models.is_issued): say so rather than "not found".
     if full_matches:
         stopped = max(full_matches, key=lambda match: match.confidence)
-        return _not_usable_no_match(stopped), to_review
+        record = next(c for c in candidates if c.lei == stopped.lei)
+        return _not_usable_no_match(stopped), [record, *to_review]
 
     # The OpenFIGI fallback found a candidate whose address did not agree.
     if isin_result:
@@ -393,14 +404,15 @@ def _classify_candidates(
         return _hq_only_no_match(
             entity, best_hq_candidate, best_hq_score,
             best_hq_name_score, best_hq_details,
-        ), to_review
+        ), [best_hq_candidate, *to_review]
 
     # A single very strong, unique name hit with no address
     # corroboration is also not asserted; surfaced as NO_MATCH for
     # manual review.
     name_only = _name_only_no_match(entity, candidates)
     if name_only:
-        return name_only, to_review
+        result, record = name_only
+        return result, [record, *to_review]
 
     return _no_match(NOT_FOUND_NOTE), to_review
 
@@ -525,8 +537,8 @@ def _hq_only_no_match(
 
 def _name_only_no_match(
     entity: InputEntity, candidates: list[GleifCandidate]
-) -> Optional[LookupResult]:
-    """NO_MATCH for a lone very strong name hit, else None."""
+) -> Optional[tuple[LookupResult, GleifCandidate]]:
+    """NO_MATCH for a lone very strong name hit, with it; else None."""
     contenders = [(c, best_name_score(entity, c)) for c in candidates]
     ambiguous_pool = [(c, s) for c, s in contenders if s >= STRONG_NAME_SCORE]
     strong_hits = [
@@ -578,7 +590,7 @@ def _name_only_no_match(
         ],
     )
     _apply_common_warnings(result, entity)
-    return result
+    return result, candidate
 
 
 def _build_candidate_summary(
@@ -629,6 +641,7 @@ def _closest_candidates(
     candidates: list[GleifCandidate],
     exclude_lei: Optional[str],
     limit: int = CLOSEST_CANDIDATE_LIMIT,
+    pinned: Optional[str] = None,
 ) -> list[CandidateSummary]:
     """Top runner-up candidates for the validation table, minus the LEI.
 
@@ -640,7 +653,8 @@ def _closest_candidates(
     legal-address sub-scores, so the validation table shows the name,
     city and address scores and its expandable detail the full
     addresses. A candidate listed twice (the ISIN paths may find one the
-    name search found too) is taken once.
+    name search found too) is taken once. The candidate whose LEI is
+    ``pinned`` (the record the verdict's note names) is always offered.
     """
     # The first of each LEI, in the order given: on a tie in name score,
     # GLEIF's own order decides, as it always has.
@@ -656,7 +670,10 @@ def _closest_candidates(
         reverse=True,
     )
     closest: list[CandidateSummary] = []
-    for name_score, candidate in _keep_an_issued(scored, limit):
+    picked = _keep_pinned(
+        scored, _keep_an_issued(scored, limit), pinned, limit,
+    )
+    for name_score, candidate in picked:
         addr_score, details = address_match_score(entity, candidate, "legal")
         closest.append(
             _build_candidate_summary(
@@ -684,6 +701,32 @@ def _keep_an_issued(
         (pair for pair in scored[limit:] if is_issued(pair[1].status)), None,
     )
     return picked[:limit - 1] + [issued] if issued else picked
+
+
+def _keep_pinned(
+    scored: list[tuple[float, GleifCandidate]],
+    picked: list[tuple[float, GleifCandidate]],
+    pinned: Optional[str],
+    limit: int,
+) -> list[tuple[float, GleifCandidate]]:
+    """``picked``, holding the candidate whose LEI is ``pinned``.
+
+    A note naming one record above other same-named ones must not stand
+    over a review that offers only those (so a user trusting the note
+    would accept another LEI). The pinned candidate takes the place of
+    the last stopped one, else of the last.
+    """
+    if pinned is None or any(c.lei == pinned for _, c in picked):
+        return picked
+    pair = next((p for p in scored if p[1].lei == pinned), None)
+    if pair is None:
+        return picked
+    if len(picked) < limit:
+        return picked + [pair]
+    for index in range(len(picked) - 1, -1, -1):
+        if not is_issued(picked[index][1].status):
+            return picked[:index] + picked[index + 1:] + [pair]
+    return picked[:-1] + [pair]
 
 
 def _name_vs_openfigi(figi_name: str, candidate: GleifCandidate) -> float:

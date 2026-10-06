@@ -385,7 +385,11 @@ applied by `lookup_entity` and, for stored searches, by
 note names a record of its own (an HQ-only near-miss on a stopped LEI
 ends "LEI <lei> status: <status>."). Stopped records never crowd an
 ISSUED candidate out of the three review places
-(`core/lookup._keep_an_issued`; an ISIN's records list ISSUED first).
+(`core/lookup._keep_an_issued`; an ISIN's records list ISSUED first),
+and the record a NO_MATCH note names (an HQ-only or name-only
+near-miss, a stopped full match, the OpenFIGI candidate) is always
+among them (`_keep_pinned`), so a note never stands over another
+same-named LEI.
 Review candidates must share a distinctive word with the searched name,
 or clear the name gate (`core/matcher.shares_name_word`): a name
 agreeing only in its legal form ("FISS, spol. s r.o." / "BRŮZA spol. s
@@ -397,11 +401,14 @@ dotted lone letter, where it ends spaced initials ("J. K. S. Group"; but
 HOLDINGS") is a distinguishing token (`core/matcher._initials_run`),
 while a trailing run, one spelling a legal form ("..., L.P.", "P.L.C.")
 or, after the first word, a legal designation (`_LEGAL_FORM_INITIALS`:
-"N.A.", "S.C.A.", "d.s.s.") is dropped as before. Joined initials and
-any token of three letters or fewer are covered only by their exact
-twin ("A.B.C." is neither "ABCD" nor "A.B.C.D." "ABCDE"), and names
-equal but for spacing ("J.P. Morgan" / "JPMorgan") score 100
-(`core/matcher.name_similarity`). A note's percent is the whole number
+"N.A.", "S.C.A.", "d.s.s.") is dropped as before; a letter standing
+alone ("Firma B a. s.", the letters of "M&M") is a token too, so
+siblings named by a letter stay apart. Joined initials and any token of
+three letters or fewer are covered only by their exact twin ("A.B.C."
+is neither "ABCD" nor "A.B.C.D." "ABCDE"), a name left with no token at
+all scores at most AMBIGUOUS_NAME_CAP, names equal but for spacing
+("J.P. Morgan" / "JPMorgan") score 100 (`core/matcher.name_similarity`),
+and "v likvidaci" (in liquidation) is stripped like a legal form. A note's percent is the whole number
 below the score, as the review table shows it.
 
 **The store** (`core/storage.py`) is one `searches` table: `job_id`,

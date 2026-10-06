@@ -26,6 +26,9 @@ jsc
 pjsc
 ojsc
 cjsc
+v likvidaci
+v likvidácii
+v likvidacii
 plc
 plc.
 ltd
