@@ -101,10 +101,12 @@ Candidates for a next session:
 2. ~~"Investec Fund Series" matched to its sub-fund through GLEIF's ISIN
    data~~ settled by the reviewers: a GLEIF ISIN hit stands even when the
    address differs; only the OpenFIGI path must check the address.
-3. `main` and `codenow` (the CodeNOW layout) have none of the fixes since
-   2026-09-24. The desktop app's "Create PR" (`vercel` into `main`) must
-   not be merged, as the layouts differ; port the fixes only if the
-   CodeNOW build still matters.
+3. ~~`main` and `codenow` have none of the fixes since 2026-09-24~~
+   ported on 2026-10-09: `codenow` and `main` (9f94b7d) now match
+   `vercel` 4cdc85c on the CodeNOW layout (see that branch's CLAUDE.md,
+   Current state). The layouts still differ, so the desktop app's
+   "Create PR" (`vercel` into `main`) must not be merged; port later
+   fixes by hand, with the same adaptations.
 4. Still open from before (CLAUDE.md, "Current state"): no rate limit on
    job creation and an unauthenticated `/admin`, no run on Python 3.12 or
    on a real Postgres, a date or boolean name searched as its text, and
