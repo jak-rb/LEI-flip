@@ -93,6 +93,13 @@ if ($res -match '^PASS:') {
 }
 
 # --- 4. unit tests (the build's unit-test stage) ------------------------------
+# The stage runs `coverage run -m pytest`, then `coverage xml`. Without a coverage
+# line in requirements.txt it dies with "coverage: command not found", and a
+# coverage installed on this machine would hide that - so check the file itself.
+if (-not (Select-String -Path "requirements.txt" -Pattern '^\s*coverage\b' -Quiet -ErrorAction SilentlyContinue)) {
+    Write-Host "[4/5] coverage pin ........ FAIL  (requirements.txt has no coverage line -> unit-test stage: coverage: command not found)" -ForegroundColor Red
+    $ok = $false
+}
 if (Test-Path "tests") {
     py -m pytest tests -q 2>&1 | Select-Object -Last 3
     if ($LASTEXITCODE -eq 0) {

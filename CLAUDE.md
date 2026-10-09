@@ -155,7 +155,8 @@ py -m venv .venv
 .venv\Scripts\python -m pylint --disable=C,R,W src   # the build's gate command
 
 # The plugin's readiness check (pylint gate, lint coverage, /health + /,
-# pytest) calls `py`; with the venv active `py` runs the venv's Python.
+# the coverage pin the build's unit-test stage needs, pytest) calls `py`;
+# with the venv active `py` runs the venv's Python.
 .venv\Scripts\Activate.ps1; ./scripts/check.ps1   # must print READY TO COMMIT
 ```
 
