@@ -16,6 +16,9 @@ class MatchType(str, Enum):
     HQ_MATCH = "HQ_MATCH"
     ISIN_MATCH = "ISIN_MATCH"
     ISIN_GLEIF_MATCH = "ISIN_GLEIF_MATCH"
+    #: OpenFIGI gave the ISIN's issuer name, and the LEI was found in
+    #: GLEIF by that name: GLEIF itself may not know the ISIN.
+    ISIN_OPENFIGI_MATCH = "ISIN_OPENFIGI_MATCH"
     NAME_ONLY_MATCH = "NAME_ONLY_MATCH"
     NO_MATCH = "NO_MATCH"
 
@@ -30,11 +33,19 @@ class WarningCode(str, Enum):
     HQ_ONLY_MATCH = "HQ_ONLY_MATCH"
     LAPSED_STATUS = "LAPSED_STATUS"
     ISIN_ONLY = "ISIN_ONLY"
+    #: The ISIN led to the LEI only through OpenFIGI's issuer name, so
+    #: it is checked at OpenFIGI: GLEIF may have no record of it.
+    ISIN_VIA_OPENFIGI = "ISIN_VIA_OPENFIGI"
     #: Matched with no entity name to cross-check (e.g. an ISIN-only
     #: lookup); the identity rests entirely on the identifier.
     NAME_UNVERIFIED = "NAME_UNVERIFIED"
     SINGLE_CANDIDATE_HEURISTIC = "SINGLE_CANDIDATE_HEURISTIC"
+    #: No country was given, or one that is not recognised, or the
+    #: matched record carries no country to check it against.
     COUNTRY_UNVERIFIED = "COUNTRY_UNVERIFIED"
+    #: The given country is neither the matched record's legal nor its
+    #: HQ country (an ISIN-based match, which does not gate on country).
+    COUNTRY_MISMATCH = "COUNTRY_MISMATCH"
     CHECK_FAILED = "CHECK_FAILED"
     #: Two or more DISTINCT LEIs cleared the name+address gate with
     #: near-equal confidence - the asserted LEI may be the wrong sibling
@@ -44,6 +55,113 @@ class WarningCode(str, Enum):
     #: contradict the candidate's (both sides have data and disagree).
     #: Common at shared registered-agent addresses - verify first.
     ADDRESS_CONTRADICTION = "ADDRESS_CONTRADICTION"
+
+
+def is_issued(status: Optional[str]) -> bool:
+    """Whether an LEI with this GLEIF status may be used: only ISSUED.
+
+    Any other status (LAPSED, RETIRED, MERGED, PENDING_TRANSFER, ...)
+    is a stop: such an LEI is shown for information, but never matched
+    or accepted, as it cannot be reported.
+
+    Args:
+        status: A GLEIF registration status, or None.
+
+    Returns:
+        True only for ISSUED (in any case).
+    """
+    return (status or "").strip().upper() == "ISSUED"
+
+
+def has_acceptable_candidate(closest: list) -> bool:
+    """Whether a stored row offers a candidate the user may accept.
+
+    A row with no algorithmic match is reviewed in the validation
+    stepper only then; candidates that are all stopped by their status
+    (see is_issued) leave nothing to decide, so the row is a no-match.
+
+    Args:
+        closest: The row's stored candidates (dicts).
+    """
+    return any(is_issued(candidate.get("status")) for candidate in closest)
+
+
+def stopped_note(closest: list) -> Optional[str]:
+    """The note of a row whose every candidate is stopped by its status.
+
+    Such a row has nothing to accept, so it is a no-match; its note
+    names the records and their statuses, which are only to be seen.
+    They are the closest records, not the entity: the note claims no
+    more (a full match on a stopped LEI has a note of its own).
+
+    Args:
+        closest: The row's candidates (dicts).
+
+    Returns:
+        The note, or None when there is no candidate or one may be
+        accepted.
+    """
+    if not closest or has_acceptable_candidate(closest):
+        return None
+    listed = "; ".join(
+        f"{record.get('legal_name')} (LEI {record.get('lei')}, "
+        f"{record.get('status')})"
+        for record in closest
+    )
+    return (
+        f"No usable LEI found in GLEIF. The closest records cannot be "
+        f"used: {listed}."
+    )
+
+
+def shown_note(row: dict) -> str:
+    """A stored row's lookup note, as the page and the downloads show it.
+
+    A row with no match whose candidates are all stopped gets the note
+    naming them (see stopped_note), unless its note is about a record
+    of its own (the match names one, as a stopped full match or an
+    HQ-only near-miss does): rows stored before 2026-10-06, and plain
+    notes such as "No LEI found", would otherwise hide them.
+    """
+    match = row.get("match") or {}
+    note = match.get("notes") or ""
+    if (
+        match.get("lei") or match.get("lei_status")
+        or match.get("gleif_legal_name")
+    ):
+        return note
+    return stopped_note(row.get("closest") or []) or note
+
+
+def standing_decision(row: dict) -> dict:
+    """A stored row's manual decision while it still stands, else {}.
+
+    A decision is taken only on a row without an algorithmic match that
+    offers a candidate to accept, and confirms only such a candidate
+    (see core/storage.record_decision). One saved before 2026-10-06 may
+    have confirmed an LEI that is not ISSUED, or sit on a row that now
+    offers nothing to accept: it no longer counts, so no stopped LEI
+    reaches the matched records or a download.
+
+    Args:
+        row: A stored result row.
+
+    Returns:
+        The row's decision dict, or {} when there is none that stands.
+    """
+    closest = row.get("closest") or []
+    if (row.get("match") or {}).get("lei"):
+        return {}
+    if not has_acceptable_candidate(closest):
+        return {}
+    decision = row.get("decision") or {}
+    if decision.get("status") == "confirmed":
+        chosen = next(
+            (c for c in closest if c.get("lei") == decision.get("lei")), None
+        )
+        if chosen is None or not is_issued(chosen.get("status")):
+            return {}
+    return decision
 
 
 def is_blank(text: Optional[str]) -> bool:
@@ -158,9 +276,9 @@ class CandidateSummary(BaseModel):
     """A runner-up GLEIF candidate for the detail page's closest list.
 
     Carries the fields each validation row shows (name, country, city,
-    street, and an overall match percent) plus the supporting detail its
-    expandable section reveals (the per-field scores and the full legal
-    and HQ addresses).
+    the name, city and address scores, and the LEI status) plus the
+    supporting detail its expandable section reveals (the per-field
+    scores and the full legal and HQ addresses).
     """
 
     legal_name: str
@@ -169,14 +287,18 @@ class CandidateSummary(BaseModel):
     country: Optional[str] = None
     city: Optional[str] = None
     street: Optional[str] = None
-    #: Name-weighted (60/40) blend of name and address agreement, shown
-    #: as the row's overall match percent. Display-only: it never gates a
-    #: match (see core/lookup.py).
+    #: Name-weighted (60/40) blend of name and address agreement. No
+    #: longer shown (reviewers found it misleading), but kept: it orders
+    #: the candidates, and stored searches carry it.
     overall: float = 0.0
     name_score: float = 0.0
     city_score: float = 0.0
     street_score: float = 0.0
     zip_score: float = 0.0
+    #: Street and ZIP agreement, weighted as the matcher weighs them,
+    #: over the parts both sides carry; None when they share neither.
+    #: The review table's "Address" score; display-only.
+    address_score: Optional[float] = None
     legal_address: Optional[str] = None
     hq_address: Optional[str] = None
 

@@ -17,6 +17,7 @@ style) that the SQLite path rewrites to ``?``.
 """
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -26,11 +27,46 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
+from .models import has_acceptable_candidate, is_issued
+
+logger = logging.getLogger(__name__)
+
 #: Postgres connection string (a CodeNOW service binding, say); with
 #: neither variable set the store is SQLite.
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get(
     "POSTGRES_URL"
 )
+
+#: Whether the app runs on Vercel, where the same core is deployed;
+#: never true on CodeNOW, so the guard below is inert there. Vercel's
+#: functions have no persistent disk, so a SQLite file in one
+#: instance's /tmp would lose every search to the next instance: on
+#: Vercel the store refuses to run without a database URL.
+_ON_VERCEL = bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV"))
+
+#: libpq limits for a Postgres connection, all enforced on this side: a
+#: connect gives up after 10 s (psycopg's default is 130 s per address),
+#: and keepalives plus the TCP user timeout end a connection whose peer
+#: went away mid-query, so neither holds a waitress thread for long.
+_PG_CONNECT_OPTIONS = {
+    "connect_timeout": 10,
+    "keepalives": 1,
+    "keepalives_idle": 5,
+    "keepalives_interval": 2,
+    "keepalives_count": 3,
+    "tcp_user_timeout": 15_000,
+}
+
+#: Longest a Postgres statement (or its wait for a row lock) may run.
+#: Set per transaction with SET LOCAL: a connection pooler may refuse
+#: startup options (Neon's does), and a session SET would outlive the
+#: transaction on a pooled server connection.
+_STATEMENT_TIMEOUT = "30s"
+
+#: Advisory lock key that serialises the lazy schema creation on
+#: Postgres, where CREATE TABLE IF NOT EXISTS is not safe against a
+#: concurrent one (two processes starting on an empty database).
+_SCHEMA_LOCK_KEY = 4_315_700
 
 #: Per-search rows older than this are deleted on the next write.
 SEARCH_RETENTION_DAYS = 30
@@ -65,9 +101,18 @@ CREATE TABLE IF NOT EXISTS searches (
 _schema_ready = False
 
 
+class StoreUnavailable(RuntimeError):
+    """The store cannot keep searches: on Vercel, no database is set."""
+
+
 def using_postgres() -> bool:
     """Whether the store is the configured Postgres database."""
     return bool(DATABASE_URL)
+
+
+def store_configured() -> bool:
+    """Whether searches can be stored: Postgres, or SQLite off Vercel."""
+    return using_postgres() or not _ON_VERCEL
 
 
 def _sqlite_path() -> Path:
@@ -86,18 +131,29 @@ class _Connection:
     """
 
     def __init__(self) -> None:
+        # Postgres only: whether a transaction is open, so the statement
+        # timeout is set once at the start of each.
+        self._in_transaction = False
         if using_postgres():
             # Imported lazily: not needed (or installed) for local SQLite.
             import psycopg
             from psycopg.rows import dict_row
 
-            # Bounded: an unreachable database would otherwise hold a
-            # waitress thread for psycopg's default 130 s per request.
+            # No server-side prepared statements: each request has a
+            # connection of its own, so they would save nothing, and
+            # they must not depend on how the pooler handles them.
             self._raw = psycopg.connect(
-                DATABASE_URL, row_factory=dict_row, connect_timeout=10
+                DATABASE_URL, row_factory=dict_row, prepare_threshold=None,
+                **_PG_CONNECT_OPTIONS,
             )
             self._sqlite = False
         else:
+            if _ON_VERCEL:
+                logger.error(
+                    "No DATABASE_URL or POSTGRES_URL on Vercel: refusing "
+                    "the per-instance SQLite store"
+                )
+                raise StoreUnavailable("no database is configured")
             path = _sqlite_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             self._raw = sqlite3.connect(path)
@@ -108,6 +164,12 @@ class _Connection:
         """Run one statement and return its cursor."""
         if self._sqlite:
             return self._raw.execute(sql.replace("%s", "?"), params)
+        if not self._in_transaction:
+            # psycopg opens the transaction with this statement.
+            self._raw.execute(
+                f"SET LOCAL statement_timeout = '{_STATEMENT_TIMEOUT}'"
+            )
+            self._in_transaction = True
         return self._raw.execute(sql, params or None)
 
     def begin_write(self) -> None:
@@ -127,6 +189,17 @@ class _Connection:
         if self._sqlite:
             self._raw.execute("BEGIN IMMEDIATE")
 
+    def lock_schema(self) -> None:
+        """Serialise the schema creation with other processes (Postgres).
+
+        The lock is held until the transaction ends. SQLite needs none:
+        its DDL takes the write lock.
+        """
+        if not self._sqlite:
+            self.execute(
+                "SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_KEY,)
+            )
+
     def fetchone(self, sql: str, params: tuple = ()) -> Optional[dict]:
         """Run a query and return its first row as a dict, or None."""
         row = self.execute(sql, params).fetchone()
@@ -143,6 +216,7 @@ class _Connection:
     def commit(self) -> None:
         """Commit the open transaction."""
         self._raw.commit()
+        self._in_transaction = False
 
     def close(self) -> None:
         """Close the connection."""
@@ -156,9 +230,13 @@ def _connect() -> Iterator[_Connection]:
     conn = _Connection()
     try:
         if not _schema_ready:
+            conn.lock_schema()
             conn.execute(_SCHEMA)
             conn.commit()
             _schema_ready = True
+            logger.info(
+                "Store: %s", "Postgres" if using_postgres() else "SQLite"
+            )
         yield conn
         conn.commit()
     finally:
@@ -200,7 +278,7 @@ def create_search(job_id: str, mode: str, query: list) -> None:
 
     Args:
         job_id: Random id identifying this search.
-        mode: "single" or "bulk".
+        mode: "single", "bulk" or "paste".
         query: The entities' input fields, one dict per entity, in the
             order they will be looked up.
     """
@@ -283,17 +361,21 @@ def get_search(job_id: str) -> Optional[dict]:
     return data
 
 
-def get_all_searches() -> tuple[list[str], list[dict]]:
-    """Return (column names, all rows) of the searches table.
+def get_all_searches(
+    limit: int, offset: int = 0
+) -> tuple[list[str], list[dict]]:
+    """Return (column names, one page of rows) of the searches table.
 
-    A full dump for the admin page: every column and every stored row,
-    newest first. ``query`` and ``results`` come back as their raw stored
-    JSON strings (not decoded), so the page shows exactly what the table
-    holds.
+    A dump for the admin page: every column of the stored rows, newest
+    first, ``limit`` of them after skipping ``offset``. ``query`` and
+    ``results`` come back as their raw stored JSON strings (not
+    decoded), so the page shows exactly what the table holds.
     """
     with _connect() as conn:
         return conn.fetchall(
-            "SELECT * FROM searches ORDER BY created_at DESC"
+            "SELECT * FROM searches ORDER BY created_at DESC, job_id "
+            "LIMIT %s OFFSET %s",
+            (limit, offset),
         )
 
 
@@ -325,7 +407,8 @@ def record_decision(
         The saved decision dict, or None if the job is missing or still
         running, the index is out of range, the row has nothing to
         validate, the LEI is not one of that entity's stored
-        candidates, or rival writes won every attempt.
+        candidates with an ISSUED LEI, or rival writes won every
+        attempt.
     """
     if not _is_job_id(job_id) or not isinstance(index, int):
         return None
@@ -363,15 +446,22 @@ def _apply_decision(
     if len(results) < len(query) or not (0 <= index < len(results)):
         return None
     row = results[index]
-    # The detail page's to-validate test (app._partition): candidates,
-    # but no algorithmic match.
-    if (row.get("match") or {}).get("lei") or not row.get("closest"):
+    # The detail page's to-validate test (main.routes._partition): no
+    # algorithmic match, and a candidate the user may accept.
+    closest = row.get("closest") or []
+    if (row.get("match") or {}).get("lei") or not has_acceptable_candidate(
+        closest
+    ):
         return None
     if choice == "none":
         decision = {"status": "none"}
     else:
-        candidate_leis = {c.get("lei") for c in row["closest"]}
-        if choice not in candidate_leis:
+        # Only an ISSUED LEI may be accepted: any other is shown only to
+        # be seen (see core.models.is_issued).
+        acceptable = {
+            c.get("lei") for c in closest if is_issued(c.get("status"))
+        }
+        if choice not in acceptable:
             return None
         decision = {"status": "confirmed", "lei": choice}
     row["decision"] = decision

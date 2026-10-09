@@ -222,6 +222,19 @@ def test_prefixed_app_answers_only_under_its_prefix(prefixed):
     assert prefixed.post("/api/jobs").status_code == 404
 
 
+def test_prefixed_live_pages_are_not_stored_by_the_browser(prefixed):
+    """Results and downloads are sent no-store under the prefix too.
+
+    The build runs the suite with URL_PREFIX unset, where a hook keyed
+    on paths such as "/results" would still pass the other tests.
+    """
+    job_id = "0" * 32
+    for path in ("/results", "/download/csv", "/download/excel"):
+        response = prefixed.get(f"{TEST_PREFIX}{path}?job={job_id}")
+        assert response.headers["Cache-Control"] == "no-store", path
+    assert "Cache-Control" not in prefixed.get(TEST_PREFIX + "/").headers
+
+
 def test_prefixed_pages_link_and_load_under_the_prefix(prefixed):
     """Every local link, stylesheet, image and script is under the prefix."""
     created = prefixed.post(

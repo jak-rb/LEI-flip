@@ -222,6 +222,9 @@ class _RecordingClient:
         self.countries.append(None)
         return []
 
+    def search_by_fuzzy_name(self, name):
+        return []
+
     def search_by_isin(self, isin):
         return []
 
@@ -396,6 +399,9 @@ class _FakeSession:
         self.headers = {}
         self.calls = []
 
+    def mount(self, prefix, adapter):
+        pass
+
     def get(self, url, params=None, timeout=None, stream=False):
         self.calls.append(dict(params or {}))
         return self.handler(dict(params or {}))
@@ -420,14 +426,15 @@ def _response(status=200):
 
 
 def _no_openfigi(*args, **kwargs):
-    raise requests.ConnectionError("OpenFIGI is offline in tests")
+    """OpenFIGI knowing no issuer for the ISIN."""
+    return _response()
 
 
 @pytest.fixture
 def session(monkeypatch):
     fake = _FakeSession(lambda params: _response())
     monkeypatch.setattr(gleif.requests, "Session", lambda: fake)
-    monkeypatch.setattr(openfigi.requests, "post", _no_openfigi)
+    monkeypatch.setattr(openfigi, "_post", _no_openfigi)
     return fake
 
 

@@ -2,8 +2,8 @@
 """Czech versions of the lookup notes, for the results page.
 
 The lookup code writes its notes in English (core/lookup.py,
-core/isin.py and the failed-lookup notes in main/routes.py), and they are
-stored and exported that way. The results page shows every note in
+core/isin.py and the failed-lookup notes in main/routes.py), and they
+are stored and exported that way. The results page shows every note in
 both languages: ``czech_note`` maps a known English note to Czech,
 keeping its parameters (ISINs, names, addresses, scores), and returns
 any note it does not know unchanged, so it then reads in English in
@@ -50,11 +50,35 @@ _NOTE_TEMPLATES = [
     ),
     (
         "ISIN {isin} is not in GLEIF's authoritative mapping. OpenFIGI "
+        "resolved it to the issuer {figi_name}; the closest GLEIF "
+        "matches are listed for review.",
+        "ISIN {isin} není v autoritativním mapování GLEIF. Podle OpenFIGI "
+        "patří emitentovi {figi_name}; nejbližší shody z GLEIF jsou "
+        "uvedeny ke kontrole.",
+    ),
+    # The same note without the issuer's name, as written until
+    # 2026-10-06; it can go once those searches expire (2026-11-05).
+    (
+        "ISIN {isin} is not in GLEIF's authoritative mapping. OpenFIGI "
         "resolved it to an issuer name; the closest GLEIF matches are "
         "listed for review.",
         "ISIN {isin} není v autoritativním mapování GLEIF. OpenFIGI "
         "k němu našlo název emitenta; nejbližší shody z GLEIF jsou "
         "uvedeny ke kontrole.",
+    ),
+    (
+        "Name and legal address match {name} (LEI {lei}), but its LEI "
+        "status is {status} - the LEI cannot be used and was not "
+        "assigned.",
+        "Název i sídlo odpovídají subjektu {name} (LEI {lei}), ale LEI má "
+        "stav {status} - nelze ho použít a nebylo přiřazeno.",
+    ),
+    (
+        "ISIN {isin} maps in GLEIF to {name} (LEI {lei}), but its LEI "
+        "status is {status} - the LEI cannot be used and was not "
+        "assigned.",
+        "ISIN {isin} odpovídá v GLEIF subjektu {name} (LEI {lei}), ale "
+        "LEI má stav {status} - nelze ho použít a nebylo přiřazeno.",
     ),
     (
         "ISIN {isin} found in GLEIF; LEI assigned despite the address "
@@ -74,6 +98,72 @@ _NOTE_TEMPLATES = [
         "Silná shoda názvu ({score} %) se subjektem {name}. ISIN {isin} "
         "potvrzuje LEI.",
     ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}; the "
+        "LEI was found in GLEIF by that name, not by the ISIN, and its "
+        "legal address matches the one given.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name}; LEI bylo "
+        "v GLEIF nalezeno podle tohoto názvu, ne podle ISIN, a sídlo "
+        "odpovídá zadané adrese.",
+    ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}; the "
+        "LEI was found in GLEIF by that name, not by the ISIN, and its "
+        "headquarters address matches the one given.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name}; LEI bylo "
+        "v GLEIF nalezeno podle tohoto názvu, ne podle ISIN, a adresa "
+        "centrály odpovídá zadané adrese.",
+    ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}, and "
+        "GLEIF has {name} under that name, but its address does not "
+        "match the one given - LEI not assigned. Please review.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name} a GLEIF "
+        "pod tímto názvem vede subjekt {name}, jeho adresa ale "
+        "neodpovídá zadané - LEI nebylo přiřazeno. Zkontrolujte ho "
+        "prosím.",
+    ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}, and "
+        "GLEIF has {name} (LEI {lei}) under that name, but its LEI status "
+        "is {status} - the LEI cannot be used and was not assigned.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name} a GLEIF "
+        "pod tímto názvem vede subjekt {name} (LEI {lei}), LEI má ale stav "
+        "{status} - nelze ho použít a nebylo přiřazeno.",
+    ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}, and "
+        "GLEIF has {name} under that name, but no town was given to check "
+        "its address against - LEI not assigned. Please review.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name} a GLEIF "
+        "pod tímto názvem vede subjekt {name}, k ověření adresy ale nebylo "
+        "zadáno město - LEI nebylo přiřazeno. Zkontrolujte ho prosím.",
+    ),
+    (
+        "No usable LEI found in GLEIF. The closest records cannot be used: "
+        "{records}.",
+        "V GLEIF nebylo nalezeno použitelné LEI. Nejbližší záznamy nelze "
+        "použít: {records}.",
+    ),
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}, and "
+        "GLEIF has {name} under that name, but no address was given to "
+        "check it against - LEI not assigned. Please review.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name} a GLEIF "
+        "pod tímto názvem vede subjekt {name}, k ověření ale nebyla "
+        "zadána adresa - LEI nebylo přiřazeno. Zkontrolujte ho prosím.",
+    ),
+    # The same match as noted until 2026-10-06, before the OpenFIGI
+    # path checked the address; it can go once those searches expire
+    # (2026-11-05).
+    (
+        "ISIN {isin} resolved via OpenFIGI to the issuer {figi_name}; the "
+        "LEI was found in GLEIF by that name, not by the ISIN.",
+        "Podle OpenFIGI patří ISIN {isin} emitentovi {figi_name}; LEI bylo "
+        "v GLEIF nalezeno podle tohoto názvu, ne podle ISIN.",
+    ),
+    # The same note as written until 2026-10-06, which the searches
+    # stored by then keep; it can go once they expire (2026-11-05).
     (
         "ISIN {isin} resolved via OpenFIGI ({figi_name}); LEI found in "
         "GLEIF.",
@@ -121,11 +211,21 @@ _NOTE_TEMPLATES = [
         "LEI nebylo přiřazeno. Vyhledejte prosím tento subjekt později "
         "znovu.",
     ),
+    (
+        "Lookup failed: OpenFIGI kept failing - LEI not assigned. Please "
+        "search this entity again later.",
+        "Vyhledání selhalo: OpenFIGI opakovaně selhávalo - LEI nebylo "
+        "přiřazeno. Vyhledejte prosím tento subjekt později znovu.",
+    ),
 ]
 
 # The sentence some notes end with when the LEI is not maintained: the
-# HQ-only near-miss adds the first, the ISIN matches the second.
+# HQ-only near-miss adds the first (the second until 2026-10-06, without
+# the LEI); the ISIN matches added the third
+# until 2026-10-06, when they stopped asserting any LEI but an ISSUED
+# one, and the searches stored by then keep it (until 2026-11-05).
 _STATUS_TEMPLATES = [
+    (" LEI {lei} status: {status}.", " Stav LEI {lei}: {status}."),
     (" LEI status: {status}.", " Stav LEI: {status}."),
     (
         " WARNING: the LEI has status {status} (not maintained).",
@@ -136,12 +236,19 @@ _STATUS_TEMPLATES = [
 _FIELD_RE = re.compile(r"\{(\w+)\}")
 
 
+#: What a field matches: any text, but an LEI only as one (20 letters
+#: and digits), or "LEI {lei} status" would take the "LEI not assigned"
+#: earlier in the same note for its start.
+_FIELD_PATTERNS = {"lei": "[A-Z0-9]{20}"}
+
+
 def _compile(english: str) -> re.Pattern:
     """A regex matching an English template, one group per field."""
     parts = _FIELD_RE.split(english)
     return re.compile(
         "".join(
-            f"(?P<{part}>.*?)" if position % 2 else re.escape(part)
+            f"(?P<{part}>{_FIELD_PATTERNS.get(part, '.*?')})"
+            if position % 2 else re.escape(part)
             for position, part in enumerate(parts)
         ),
         re.DOTALL,
@@ -175,7 +282,9 @@ def czech_note(note: Optional[str]) -> str:
         match = pattern.fullmatch(note)
         if match:
             body = match["body"]
-            status_sentence = czech.format(status=match["status"])
+            fields = match.groupdict()
+            del fields["body"]
+            status_sentence = czech.format(**fields)
             break
     for pattern, czech in _NOTES:
         match = pattern.fullmatch(body)

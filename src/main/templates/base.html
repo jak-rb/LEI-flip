@@ -99,7 +99,9 @@
                        rel="noopener">GLEIF</a> database. If a search by ISIN
                        isn't found directly in GLEIF, the tool falls back to
                        <strong>OpenFIGI</strong> (a free Bloomberg service) to
-                       look up the issuer by name.</p>
+                       look up the issuer by name. A match found that way
+                       also needs the address you give to agree; otherwise
+                       it is offered for review.</p>
 
                     <h3 class="dialog-subtitle">Single lookup</h3>
                     <ol class="dialog-steps">
@@ -126,6 +128,16 @@
                         <li>Drag the file onto the upload area, or click to select it.</li>
                         <li>Click <strong>Search</strong>.</li>
                     </ol>
+                    <p>For a few rows no file is needed: click
+                       <strong>Paste rows</strong> and paste the rows
+                       copied from Excel (with or without the header row),
+                       in the same column order. An empty ISIN cell is
+                       fine. Rows from an e-mail, where the columns are
+                       at least two spaces apart, are read too. The name
+                       there ends where the ISIN or the country starts,
+                       so a row without an ISIN needs its country, and
+                       an empty city or street, or a doubled space inside
+                       one, moves the columns after it.</p>
 
                     <h3 class="dialog-subtitle">Choosing the right match</h3>
                     <p>Every searched entity lands in one group:
@@ -134,9 +146,16 @@
                        <strong>Unmatched</strong>.</p>
                     <ol class="dialog-steps">
                         <li>For each entity that needs validation, the tool
-                            lists the closest candidates it found. Click
-                            <strong>Correct match</strong> on the right one, or
-                            <strong>None of these</strong> if none fit.</li>
+                            lists the closest candidates it found, with their
+                            name, city and address scores (green: agrees, red:
+                            does not, a dash: nothing to compare) and their
+                            LEI status. Click <strong>Accept</strong> on the
+                            right one, or <strong>None of these</strong> if
+                            none fit.</li>
+                        <li>Only an <strong>ISSUED</strong> LEI can be used.
+                            A LAPSED, RETIRED or any other status is shown in
+                            red for information only: it is never matched and
+                            cannot be accepted.</li>
                         <li>Your choices are saved and flow into the CSV and
                             Excel downloads.</li>
                     </ol>
@@ -146,7 +165,9 @@
                        v databázi <a href="https://www.gleif.org/" target="_blank"
                        rel="noopener">GLEIF</a>. Pokud se ISIN v GLEIF nenajde
                        přímo, nástroj dohledá emitenta podle názvu přes
-                       <strong>OpenFIGI</strong> (bezplatnou službu Bloombergu).</p>
+                       <strong>OpenFIGI</strong> (bezplatnou službu Bloombergu).
+                       Takto nalezená shoda musí souhlasit i se zadanou
+                       adresou; jinak se nabídne ke kontrole.</p>
 
                     <h3 class="dialog-subtitle">Jednotlivé vyhledání</h3>
                     <ol class="dialog-steps">
@@ -173,6 +194,16 @@
                             vyberte kliknutím.</li>
                         <li>Klikněte na <strong>Hledat</strong>.</li>
                     </ol>
+                    <p>Pro pár řádků soubor není potřeba: klikněte na
+                       <strong>Vložit řádky</strong> a vložte řádky
+                       zkopírované z Excelu (se záhlavím nebo bez něj) ve
+                       stejném pořadí sloupců. Prázdná buňka ISIN nevadí.
+                       Přečtou se i řádky z e-mailu, kde sloupce oddělují
+                       alespoň dvě mezery. Název v nich končí tam, kde
+                       začíná ISIN nebo země, takže řádek bez ISIN musí
+                       mít vyplněnou zemi, a když chybí město nebo ulice
+                       nebo je v nich zdvojená mezera, posunou se sloupce
+                       za nimi.</p>
 
                     <h3 class="dialog-subtitle">Výběr správné shody</h3>
                     <p>Každý hledaný subjekt skončí v jedné skupině:
@@ -181,9 +212,16 @@
                        <strong>Nespárováno</strong>.</p>
                     <ol class="dialog-steps">
                         <li>U každého subjektu k ověření nástroj vypíše
-                            nejbližší nalezené kandidáty. U správného klikněte
-                            na <strong>Správná shoda</strong>, nebo na
-                            <strong>Žádný z nich</strong>, pokud nesedí žádný.</li>
+                            nejbližší nalezené kandidáty se skóre názvu, města
+                            a adresy (zelená: souhlasí, červená: nesouhlasí,
+                            pomlčka: není s čím porovnat) a se stavem LEI.
+                            U správného klikněte na <strong>Přijmout</strong>,
+                            nebo na <strong>Žádný z nich</strong>, pokud
+                            nesedí žádný.</li>
+                        <li>Použít lze jen LEI ve stavu
+                            <strong>ISSUED</strong>. LAPSED, RETIRED či
+                            jakýkoli jiný stav je červeně jen pro informaci:
+                            nikdy se nespáruje a nelze ho přijmout.</li>
                         <li>Vaše volby se uloží a promítnou do exportů CSV
                             a Excel.</li>
                     </ol>

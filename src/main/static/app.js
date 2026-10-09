@@ -15,7 +15,8 @@ const STRINGS = {
         needNameOrIsin: "Please enter an entity name or an ISIN",
         selectFile: "Please select a .xlsx, .csv, .tsv or .txt file",
         selectFileFirst: "Please select a file first",
-        tooLarge: "That file is too large. The maximum upload size is 4 MB.",
+        pasteRowsFirst: "Please paste the rows first",
+        tooLarge: "The request is too large (max 4 MB).",
         couldNotStart: "The search could not be started. Please try again.",
         unreachable: "Could not reach the server. Please try again.",
         unreachableResume: "Could not reach the server. Reload the page to resume.",
@@ -23,6 +24,8 @@ const STRINGS = {
         reloadToResume: "Reload the page to resume.",
         throttled: (seconds) =>
             `GLEIF is limiting requests. Continuing in ${seconds} s…`,
+        throttledOpenFigi: (seconds) =>
+            `OpenFIGI is busy. Continuing in ${seconds} s…`,
         noFiles: "No files selected yet",
         removeFile: "Remove file",
         toDark: "Switch to dark mode",
@@ -38,7 +41,8 @@ const STRINGS = {
         needNameOrIsin: "Zadejte název subjektu nebo ISIN",
         selectFile: "Vyberte soubor .xlsx, .csv, .tsv nebo .txt",
         selectFileFirst: "Nejprve vyberte soubor",
-        tooLarge: "Soubor je příliš velký. Maximální velikost je 4 MB.",
+        pasteRowsFirst: "Nejprve vložte řádky",
+        tooLarge: "Požadavek je příliš velký (max. 4 MB).",
         couldNotStart: "Vyhledávání se nepodařilo spustit. Zkuste to prosím znovu.",
         unreachable: "Server není dostupný. Zkuste to prosím znovu.",
         unreachableResume: "Server není dostupný. Obnovte stránku pro pokračování.",
@@ -46,6 +50,8 @@ const STRINGS = {
         reloadToResume: "Obnovte stránku pro pokračování.",
         throttled: (seconds) =>
             `GLEIF omezuje počet dotazů. Pokračuji za ${seconds} s…`,
+        throttledOpenFigi: (seconds) =>
+            `Služba OpenFIGI je přetížená. Pokračuji za ${seconds} s…`,
         noFiles: "Zatím není vybrán žádný soubor",
         removeFile: "Odebrat soubor",
         toDark: "Přepnout na tmavý režim",
@@ -70,13 +76,30 @@ function t(key, ...args) {
     return typeof value === "function" ? value(...args) : value;
 }
 
+// A STRINGS message in both languages, as { en, cs }.
+function both(key, ...args) {
+    const pick = (lang) => {
+        const value = STRINGS[lang][key];
+        return typeof value === "function" ? value(...args) : value;
+    };
+    return { en: pick("en"), cs: pick("cs") };
+}
+
 // The server's JSON error replies carry the message in English ("error")
-// and Czech ("error_cs"); return the one for the current language, if any.
-function serverError(data) {
-    if (!data) {
+// and Czech ("error_cs"); return both as { en, cs }, or null for none.
+function serverMessage(data) {
+    if (!data || !data.error) {
         return null;
     }
-    return (currentLang() === "cs" && data.error_cs) || data.error || null;
+    return { en: data.error, cs: data.error_cs || data.error };
+}
+
+// Show a { en, cs } message on an element, keeping both versions on it:
+// a language switch (applyLang) then shows the other one.
+function showBoth(el, message) {
+    el.setAttribute("data-en", message.en);
+    el.setAttribute("data-cs", message.cs);
+    el.textContent = message[currentLang()];
 }
 
 // The app may be served under a URL prefix (CodeNOW's URL_PREFIX), so
@@ -101,9 +124,14 @@ function applyThemeLabel() {
     button.setAttribute("aria-label", text);
 }
 
+// Whether the user picked a theme on this page (it then no longer follows
+// the OS, even where storage is blocked).
+let themeChosen = false;
+
 function setTheme(next, remember) {
     document.documentElement.setAttribute("data-theme", next);
     if (remember) {
+        themeChosen = true;
         try {
             localStorage.setItem(THEME_KEY, next);
         } catch (error) {
@@ -169,7 +197,9 @@ function setupThemeAndLang() {
     if (stored !== "light" && stored !== "dark" && window.matchMedia) {
         const query = window.matchMedia("(prefers-color-scheme: dark)");
         query.addEventListener("change", (event) => {
-            setTheme(event.matches ? "dark" : "light", false);
+            if (!themeChosen) {
+                setTheme(event.matches ? "dark" : "light", false);
+            }
         });
     }
 
@@ -208,24 +238,39 @@ function setupDialog(buttonId, dialogId) {
 
 // ---- Search-page forms ----
 
-// Show/clear the validation message that sits next to a Search button.
+// Show ({ en, cs }) or clear (null) the validation message that sits
+// next to a Search button.
 function showFormError(form, message) {
     const errorEl = form.querySelector(".form-error");
-    if (errorEl) {
-        errorEl.textContent = message;
+    if (!errorEl) {
+        return;
+    }
+    if (message) {
+        showBoth(errorEl, message);
+    } else {
+        errorEl.removeAttribute("data-en");
+        errorEl.removeAttribute("data-cs");
+        errorEl.textContent = "";
     }
 }
 
 function clearFormError(form) {
-    showFormError(form, "");
+    showFormError(form, null);
 }
 
 // Create the search job on the server and go to its results page, where the
 // lookup itself runs step by step (see runJob). Input the server rejects
 // (400) shows its message next to the Search button instead. Search is
-// disabled meanwhile so a second click cannot create a duplicate job.
+// disabled meanwhile, and stays so once the results page is on its way,
+// so a second click cannot create a duplicate job.
 async function submitSearch(form, formData) {
     const submitBtn = form.querySelector("button[type=submit]");
+    const fail = (message) => {
+        showFormError(form, message);
+        if (submitBtn) {
+            submitBtn.disabled = false;
+        }
+    };
     if (submitBtn) {
         submitBtn.disabled = true;
     }
@@ -245,22 +290,32 @@ async function submitSearch(form, formData) {
         // in front of the app (the platform ingress) may answer first
         // with plain text.
         if (response.status === 413) {
-            showFormError(form, serverError(data) || t("tooLarge"));
+            fail(serverMessage(data) || both("tooLarge"));
             return;
         }
         if (!response.ok || !data || !data.job_id) {
-            showFormError(form, serverError(data) || t("couldNotStart"));
+            fail(serverMessage(data) || both("couldNotStart"));
             return;
         }
         window.location.href =
             appUrl("results?job=") + encodeURIComponent(data.job_id);
     } catch (error) {
-        showFormError(form, t("unreachable"));
-    } finally {
-        if (submitBtn) {
-            submitBtn.disabled = false;
-        }
+        fail(both("unreachable"));
     }
+}
+
+// A search page restored from the back-forward cache comes back as it
+// was left: with Search disabled on its way to the results.
+function setupRestoredPage() {
+    window.addEventListener("pageshow", (event) => {
+        if (event.persisted) {
+            document.querySelectorAll("form button[type=submit]").forEach(
+                (button) => {
+                    button.disabled = false;
+                },
+            );
+        }
+    });
 }
 
 // Single lookup: a name or an ISIN is required (either is enough). We validate
@@ -292,7 +347,7 @@ function setupSingleForm() {
         const hasName = nameInput && nameInput.value.trim();
         const hasIsin = isinInput && isinInput.value.trim();
         if (!hasName && !hasIsin) {
-            showFormError(form, t("needNameOrIsin"));
+            showFormError(form, both("needNameOrIsin"));
             if (nameInput) {
                 nameInput.focus();
             }
@@ -305,8 +360,9 @@ function setupSingleForm() {
     });
 }
 
-// Bulk lookup: a file must be selected. Reflect the chosen filename in the
-// file-list box and block submission when nothing is picked.
+// Bulk lookup: a file, or rows pasted from Excel, whichever the switch
+// shows; Search sends only that one. Reflect the chosen filename in the
+// file-list box and block submission when nothing is picked or pasted.
 function setupBulkForm() {
     const form = document.querySelector(".upload-form");
     if (!form) {
@@ -317,6 +373,42 @@ function setupBulkForm() {
     const fileCount = form.querySelector(".file-count");
     const fileItems = form.querySelector(".file-list-items");
     const dropzone = form.querySelector(".dropzone");
+    const pasteInput = form.querySelector("#pasted_rows");
+    const sourceButtons = Array.from(form.querySelectorAll(".source-btn"));
+    const panels = Array.from(form.querySelectorAll(".source-panel"));
+    let source = "file";
+
+    // Show the file or the paste panel, and put the cursor in the paste
+    // box, so Ctrl+V right after the switch lands there.
+    function showSource(next) {
+        source = next;
+        sourceButtons.forEach((button) => {
+            const isActive = button.getAttribute("data-source") === next;
+            button.classList.toggle("is-active", isActive);
+            button.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+        panels.forEach((panel) => {
+            panel.hidden = panel.getAttribute("data-panel") !== next;
+        });
+        clearFormError(form);
+        if (next === "paste" && pasteInput) {
+            pasteInput.focus();
+        }
+    }
+
+    sourceButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            showSource(button.getAttribute("data-source"));
+        });
+    });
+
+    if (pasteInput) {
+        pasteInput.addEventListener("input", () => {
+            if (pasteInput.value.trim()) {
+                clearFormError(form);
+            }
+        });
+    }
 
     // Only .xlsx, .csv, .tsv and .txt are accepted. The input's "accept"
     // attribute is just a picker hint, and drag-and-drop ignores it, so check
@@ -378,7 +470,7 @@ function setupBulkForm() {
             const file = fileInput.files[0];
             if (file && !isAllowedFile(file)) {
                 fileInput.value = "";
-                showFormError(form, t("selectFile"));
+                showFormError(form, both("selectFile"));
             }
             renderFiles();
         });
@@ -405,7 +497,7 @@ function setupBulkForm() {
                 return;
             }
             if (!isAllowedFile(file)) {
-                showFormError(form, t("selectFile"));
+                showFormError(form, both("selectFile"));
                 return;
             }
             // Keep the one-file cap: hand only the first dropped file to the
@@ -419,18 +511,31 @@ function setupBulkForm() {
 
     form.addEventListener("submit", (event) => {
         event.preventDefault();
-        const file = fileInput && fileInput.files[0];
-        if (!file) {
-            showFormError(form, t("selectFileFirst"));
-            return;
+        // The server parses the file or the rows when it creates the job,
+        // so a problem (wrong type, empty, no usable rows, too many rows)
+        // comes straight back as the 400 message shown next to Search.
+        const formData = new FormData();
+        if (source === "paste") {
+            const rows = pasteInput ? pasteInput.value : "";
+            if (!rows.trim()) {
+                showFormError(form, both("pasteRowsFirst"));
+                if (pasteInput) {
+                    pasteInput.focus();
+                }
+                return;
+            }
+            formData.set("mode", "paste");
+            formData.set("rows", rows);
+        } else {
+            const file = fileInput && fileInput.files[0];
+            if (!file) {
+                showFormError(form, both("selectFileFirst"));
+                return;
+            }
+            formData.set("mode", "bulk");
+            formData.set("file_upload", file);
         }
         clearFormError(form);
-        // The server parses the file when it creates the job, so a problem
-        // (wrong type, empty, no usable rows, too many rows) comes straight
-        // back as the 400 message shown next to Search.
-        const formData = new FormData();
-        formData.set("mode", "bulk");
-        formData.set("file_upload", file);
         submitSearch(form, formData);
     });
 }
@@ -485,8 +590,9 @@ function applyDecisionCounts(els, counts) {
     }
 }
 
-// Show an error (e.g. GLEIF down, or the request failed) in the card. The
-// job keeps its saved progress, so reloading the page resumes the lookup.
+// Show an error ({ en, cs }; e.g. GLEIF down, or the request failed) in
+// the card. The job keeps its saved progress, so reloading the page
+// resumes the lookup.
 function showResultsError(els, message) {
     if (!els.card) {
         return;
@@ -495,10 +601,9 @@ function showResultsError(els, message) {
     els.card.classList.add("has-error");
     els.card.setAttribute("aria-busy", "false");
     if (els.state) {
-        // Freeze the message: it must not be swapped by a language switch.
-        els.state.removeAttribute("data-cs");
-        els.state.removeAttribute("data-en");
-        els.state.textContent = message;
+        // Both versions replace the running state's, so a language
+        // switch shows the error in the other language.
+        showBoth(els.state, message);
     }
 }
 
@@ -507,10 +612,12 @@ function showResultsError(els, message) {
 const THROTTLE_MIN_SECONDS = 2;
 const THROTTLE_MAX_SECONDS = 30;
 
-// Wait out GLEIF's rate limit before the next /run call, counting down in
-// the card's state line. Both languages are kept on the element, so a
-// language switch during the wait shows the countdown in the new one.
-async function waitOutThrottle(els, retryAfter) {
+// Wait out a rate limit (GLEIF's, or OpenFIGI's when ``service`` says so)
+// before the next /run call, counting down in the card's state line. Both
+// languages are kept on the element, so a language switch during the
+// wait shows the countdown in the new one.
+async function waitOutThrottle(els, retryAfter, service) {
+    const key = service === "OpenFIGI" ? "throttledOpenFigi" : "throttled";
     const seconds = Math.min(
         Math.max(Math.ceil(Number(retryAfter)) || 0, THROTTLE_MIN_SECONDS),
         THROTTLE_MAX_SECONDS,
@@ -522,9 +629,7 @@ async function waitOutThrottle(els, retryAfter) {
     };
     for (let left = seconds; left > 0; left -= 1) {
         if (state) {
-            state.setAttribute("data-en", STRINGS.en.throttled(left));
-            state.setAttribute("data-cs", STRINGS.cs.throttled(left));
-            state.textContent = t("throttled", left);
+            showBoth(state, both(key, left));
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
     }
@@ -549,7 +654,7 @@ async function runJob(jobId) {
         try {
             response = await fetch(url, { method: "POST" });
         } catch (error) {
-            showResultsError(els, t("unreachableResume"));
+            showResultsError(els, both("unreachableResume"));
             return;
         }
 
@@ -566,8 +671,12 @@ async function runJob(jobId) {
         // fetch() only rejects on a network failure, not on a 4xx/5xx status,
         // so check the status ourselves to report a server error as one.
         if (!response.ok || !data) {
-            const reason = serverError(data) || t("serverFailed");
-            showResultsError(els, reason + " " + t("reloadToResume"));
+            const reason = serverMessage(data) || both("serverFailed");
+            const resume = both("reloadToResume");
+            showResultsError(els, {
+                en: reason.en + " " + resume.en,
+                cs: reason.cs + " " + resume.cs,
+            });
             return;
         }
 
@@ -579,7 +688,7 @@ async function runJob(jobId) {
         }
 
         if (data.throttled) {
-            await waitOutThrottle(els, data.retry_after);
+            await waitOutThrottle(els, data.retry_after, data.service);
         }
     }
 }
@@ -794,6 +903,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setupDialog("report-btn", "report-dialog");
     setupSingleForm();
     setupBulkForm();
+    setupRestoredPage();
     initResultsPage();
     setupValidation();
     // Last: translates everything the setups above rendered.

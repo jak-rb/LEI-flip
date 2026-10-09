@@ -518,6 +518,60 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
 
 .file-remove:hover { color: var(--bad); }
 
+/* File / pasted rows switch: styled like the CZ/EN switch, in the
+   card's colours. Only the chosen panel shows. */
+.source-switch {
+  display: flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+}
+
+.source-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.42rem 0.8rem;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.source-btn:hover { color: var(--fg); }
+.source-btn.is-active { background: var(--fg); color: var(--bg); }
+
+.source-panel { display: flex; flex-direction: column; gap: 1.25rem; }
+.source-panel[hidden] { display: none; }
+
+/* Rows stay one line each (wrap="off") and tabs keep them in columns. */
+.paste-box {
+  width: 100%;
+  min-height: 11.5rem;
+  padding: 0.68rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  tab-size: 4;
+  resize: vertical;
+  transition: border-color 0.15s ease;
+}
+
+.paste-box::placeholder { color: var(--faint); white-space: pre-wrap; }
+.paste-box:hover { border-color: var(--faint); }
+.paste-box:focus { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--line); }
+
 /* ---- Results summary card ------------------------------------------------ */
 
 .results-card {
@@ -703,13 +757,60 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
 /* Let the no-match notes wrap instead of forcing the table wide. */
 .table-nomatch td:last-child { white-space: normal; min-width: 18rem; }
 
+/* Flags under a matched row's legal name: a non-ISSUED LEI status and
+   the warnings that ask for a second look (the export lists them all). */
+.match-flags { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+.match-flag {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn);
+  color: var(--fg);
+  white-space: nowrap;
+}
+.match-flag-status { background: var(--bad-bg); border-color: var(--bad); }
+
+/* How a match through the ISIN was made, under its flags: a sentence,
+   so it wraps, but never into a column of single words on a phone. */
+.match-note {
+  display: block;
+  min-width: 16rem;
+  max-width: 28rem;
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+  white-space: normal;
+}
+
 .gleif-link { color: var(--focus); font-weight: 600; text-decoration: none; white-space: nowrap; }
 .gleif-link:hover { text-decoration: underline; }
 
 /* ---- Validation stepper -------------------------------------------------- */
 
-.detail-searched { margin: 0 0 1rem; color: var(--muted); }
-.detail-searched strong { color: var(--fg); }
+/* A long unbroken name must wrap, not widen the page on a phone. Each
+   field the row gave follows the name, labelled, so the candidates can
+   be compared with all of it. */
+.detail-searched { margin: 0 0 1rem; color: var(--muted); overflow-wrap: anywhere; }
+.detail-searched strong { color: var(--fg); margin-right: 0.35rem; }
+.searched-field { display: inline-block; margin-right: 0.9rem; color: var(--fg); }
+.searched-label {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Why the row was not matched (an OpenFIGI issuer name, an HQ-only
+   address...). */
+.detail-note {
+  margin: -0.4rem 0 1rem;
+  padding-left: 0.6rem;
+  border-left: 3px solid var(--warn);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
 
 .validation {
   background: var(--surface);
@@ -772,11 +873,9 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
 .validate-record.slide-right { animation: record-slide-right 0.2s ease; }
 .validate-record.slide-left { animation: record-slide-left 0.2s ease; }
 
-/* Candidate table: the Overall match column and the confirm button stay
-   pinned to the right edge while a long row scrolls. --confirm-col-width
-   fixes the button column so the percent column can offset by exactly
-   that amount. */
-.candidates-table { --confirm-col-width: 170px; }
+/* Candidate table: the Accept button stays pinned to the right edge
+   while a long row scrolls; --confirm-col-width fixes its column. */
+.candidates-table { --confirm-col-width: 150px; }
 
 .candidates-table .col-expand { width: 1%; white-space: nowrap; text-align: center; }
 
@@ -787,6 +886,7 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
   position: sticky;
   right: 0;
   background: var(--surface);
+  box-shadow: -6px 0 6px -6px rgba(43, 45, 51, 0.25);
 }
 
 .candidates-table .candidate-confirm {
@@ -794,21 +894,40 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
   width: calc(var(--confirm-col-width) - 2rem);
 }
 
-.candidates-table .col-overall {
-  position: sticky;
-  right: var(--confirm-col-width);
+.candidates-table thead .col-confirm { background: var(--bg); }
+
+/* The table fits a desktop screen: a long legal name wraps, and so do
+   the score headers ("Name / score"). */
+.candidates-table .col-name { white-space: normal; min-width: 12rem; }
+.candidates-table th.col-score { white-space: normal; width: 4.5rem; }
+
+/* The name, city and address scores: green where the matcher's gate is
+   met, red where not, a muted dash where there is nothing to compare. */
+.candidates-table .col-score {
   text-align: right;
   font-weight: 700;
-  background: var(--surface);
-  box-shadow: -6px 0 6px -6px rgba(43, 45, 51, 0.25);
+  font-variant-numeric: tabular-nums;
 }
+.score-pass { color: var(--ok); }
+.score-fail { color: var(--bad); }
+.candidates-table .score-na { color: var(--faint); font-weight: 400; }
 
-.candidates-table thead .col-confirm,
-.candidates-table thead .col-overall { background: var(--bg); }
+/* The LEI status: only ISSUED may be used; any other is a stop, shown
+   only to be seen, with no Accept button. */
+.lei-status { font-weight: 700; white-space: nowrap; }
+.lei-status-ok { color: var(--ok); }
+.lei-status-stop {
+  color: var(--bad);
+  background: var(--bad-bg);
+  border: 1px solid var(--bad);
+  border-radius: 999px;
+  padding: 0 0.45rem;
+}
+.view-only { color: var(--muted); font-size: 0.8rem; font-style: italic; }
+.candidate-row.is-stopped td { color: var(--muted); }
 
 .candidate-row.is-chosen,
-.candidate-row.is-chosen .col-confirm,
-.candidate-row.is-chosen .col-overall { background: var(--ok-bg); }
+.candidate-row.is-chosen .col-confirm { background: var(--ok-bg); }
 
 .candidate-expand {
   border: none;
@@ -890,6 +1009,9 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
   .brand-divider, .brand-text { display: none; }
   .field-row { flex-direction: column; gap: 0; }
   .results-actions-split { flex-direction: column; align-items: stretch; }
+  /* On a phone the pinned column would cover much of the candidate
+     table: let it scroll with the rest, so the names show. */
+  .candidates-table .col-confirm { position: static; box-shadow: none; }
 }
 
 @media (max-width: 560px) {

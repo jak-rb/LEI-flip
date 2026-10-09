@@ -50,6 +50,11 @@ STREET_MATCH_THRESHOLD = 55
 #: by the assert below.
 AMBIGUOUS_NAME_CAP = 70.0
 
+#: Minimum address score (0-100) for an address to corroborate a name:
+#: with a city of at least CITY_MATCH_THRESHOLD, the gate of a full
+#: match and of the address check on the OpenFIGI path.
+ADDRESS_CORROBORATION_MIN = 40
+
 #: Minimum score for a significant token to count as "covered" by a
 #: counterpart token on the other side.
 TOKEN_COVER_THRESHOLD = 85
@@ -57,10 +62,11 @@ TOKEN_COVER_THRESHOLD = 85
 #: Minimum name score to accept an ISIN-based match (used in step 5.7).
 ISIN_NAME_THRESHOLD = 50
 
-#: Minimum fuzzy-match score (0-100) for the OpenFIGI ISIN fallback:
-#: BOTH the input name AND the OpenFIGI-resolved name must score at
-#: least this against a GLEIF candidate before its LEI is accepted. This
-#: double-match guard (core/isin.py) stops OpenFIGI inventing a match.
+#: Minimum fuzzy-match score (0-100) of the OpenFIGI-resolved name
+#: against a GLEIF candidate in the OpenFIGI ISIN fallback, where the
+#: input name must clear NAME_MATCH_THRESHOLD (until 2026-10-06 it
+#: needed only this). This double-match guard (core/isin.py) stops
+#: OpenFIGI inventing a match.
 OPENFIGI_NAME_THRESHOLD = 65
 
 #: If two or more distinct LEIs clear the FULL_MATCH gate within this
@@ -68,10 +74,19 @@ OPENFIGI_NAME_THRESHOLD = 65
 #: AMBIGUOUS_MATCH.
 AMBIGUITY_CONFIDENCE_DELTA = 2.0
 
+#: Confidence ceiling for a FULL_MATCH whose input street AND zip both
+#: contradict the candidate's (flagged ADDRESS_CONTRADICTION): just
+#: below 80, so a "confidence >= 80" filter never picks one up. Set with
+#: the original tool's precision fixes of 2026-09-18.
+ADDRESS_CONTRADICTION_CAP = 79.0
+
 #: GLEIF registration statuses meaning the LEI is no longer maintained.
-LAPSED_STATUSES = frozenset(
-    {"LAPSED", "RETIRED", "ANNULLED", "MERGED", "TRANSFERRED"}
-)
+#: DUPLICATE marks the second LEI of an entity that has another one;
+#: CANCELLED a registration abandoned before it was issued.
+LAPSED_STATUSES = frozenset({
+    "LAPSED", "RETIRED", "ANNULLED", "MERGED", "TRANSFERRED",
+    "DUPLICATE", "CANCELLED",
+})
 
 
 # The precision guarantee depends on ambiguous name pairs staying below

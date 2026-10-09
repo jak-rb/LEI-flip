@@ -118,8 +118,8 @@
         </div>
         <h2 class="card-title" data-cs="Hromadné vyhledání" data-en="Bulk lookup">Bulk lookup</h2>
         <p class="card-subtitle"
-           data-cs="Nahrajte seznam subjektů. U každého vyplňte název nebo ISIN."
-           data-en="Upload your entity list. Include a name or ISIN for each row.">Upload your entity list. Include a name or ISIN for each row.</p>
+           data-cs="Nahrajte seznam subjektů, nebo vložte řádky z Excelu. U každého vyplňte název nebo ISIN."
+           data-en="Upload your entity list, or paste rows from Excel. Include a name or ISIN for each row.">Upload your entity list, or paste rows from Excel. Include a name or ISIN for each row.</p>
         <p class="column-guide">
             <strong data-cs="Pořadí sloupců" data-en="Column order">Column order</strong>
             <span data-cs="Název · ISIN · Země · Město · Ulice · PSČ"
@@ -127,33 +127,60 @@
         </p>
 
         <form class="upload-form">
-            <label for="file_upload" class="dropzone">
-                <span class="dropzone-icon" aria-hidden="true">&#8593;</span>
-                <span class="dropzone-text">
-                    <span data-cs="Přetáhněte sem soubor" data-en="Drag a">Drag a</span>
-                    <strong>.xlsx</strong>,
-                    <strong>.csv</strong>,
-                    <strong>.tsv</strong>
-                    <span data-cs="nebo" data-en="or">or</span>
-                    <strong>.txt</strong>
-                    <span data-cs="" data-en="file here">file here</span>
-                </span>
-                <span class="dropzone-hint" data-cs="nebo klikněte pro výběr" data-en="or click to select">or click to select</span>
-                <input type="file" id="file_upload" name="file_upload"
-                       accept=".xlsx,.csv,.tsv,.txt" class="file-input">
-            </label>
+            {# Search sends only the input on show: the file, or the
+               pasted rows. #}
+            <div class="source-switch" role="group" aria-label="Input"
+                 data-cs-aria-label="Způsob zadání" data-en-aria-label="Input">
+                <button type="button" class="source-btn is-active" data-source="file"
+                        aria-pressed="true" data-cs="Soubor" data-en="File">File</button>
+                <button type="button" class="source-btn" data-source="paste"
+                        aria-pressed="false" data-cs="Vložit řádky" data-en="Paste rows">Paste rows</button>
+            </div>
 
-            <p class="upload-limits"
-               data-cs="Jeden soubor, až 100 subjektů. Maximální velikost 4 MB."
-               data-en="One file, up to 100 entities. Maximum size 4 MB.">One file, up to 100 entities. Maximum size 4 MB.</p>
+            <div class="source-panel" data-panel="file">
+                <label for="file_upload" class="dropzone">
+                    <span class="dropzone-icon" aria-hidden="true">&#8593;</span>
+                    <span class="dropzone-text">
+                        <span data-cs="Přetáhněte sem soubor" data-en="Drag a">Drag a</span>
+                        <strong>.xlsx</strong>,
+                        <strong>.csv</strong>,
+                        <strong>.tsv</strong>
+                        <span data-cs="nebo" data-en="or">or</span>
+                        <strong>.txt</strong>
+                        <span data-cs="" data-en="file here">file here</span>
+                    </span>
+                    <span class="dropzone-hint" data-cs="nebo klikněte pro výběr" data-en="or click to select">or click to select</span>
+                    <input type="file" id="file_upload" name="file_upload"
+                           accept=".xlsx,.csv,.tsv,.txt" class="file-input">
+                </label>
 
-            <div class="file-list">
-                <span class="file-count">0/1</span>
-                <div class="file-list-items">
-                    <span class="file-list-empty"
-                          data-cs="Zatím není vybrán žádný soubor"
-                          data-en="No files selected yet">No files selected yet</span>
+                <p class="upload-limits"
+                   data-cs="Jeden soubor, až 100 subjektů. Maximální velikost 4 MB."
+                   data-en="One file, up to 100 entities. Maximum size 4 MB.">One file, up to 100 entities. Maximum size 4 MB.</p>
+
+                <div class="file-list">
+                    <span class="file-count">0/1</span>
+                    <div class="file-list-items">
+                        <span class="file-list-empty"
+                              data-cs="Zatím není vybrán žádný soubor"
+                              data-en="No files selected yet">No files selected yet</span>
+                    </div>
                 </div>
+            </div>
+
+            <div class="source-panel" data-panel="paste" hidden>
+                <textarea id="pasted_rows" name="rows" class="paste-box"
+                          rows="7" wrap="off" spellcheck="false"
+                          aria-label="Rows copied from Excel"
+                          data-cs-aria-label="Řádky zkopírované z Excelu"
+                          data-en-aria-label="Rows copied from Excel"
+                          placeholder="Paste rows copied from Excel here (Ctrl+V)"
+                          data-cs-placeholder="Sem vložte řádky zkopírované z Excelu (Ctrl+V)"
+                          data-en-placeholder="Paste rows copied from Excel here (Ctrl+V)"></textarea>
+
+                <p class="upload-limits"
+                   data-cs="Až 100 řádků, jeden subjekt na řádek. Řádek se záhlavím se přeskočí a ISIN může zůstat prázdný."
+                   data-en="Up to 100 rows, one entity per row. A header row is skipped, and the ISIN may stay empty.">Up to 100 rows, one entity per row. A header row is skipped, and the ISIN may stay empty.</p>
             </div>
 
             <div class="form-footer">

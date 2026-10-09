@@ -59,7 +59,7 @@ def _echo_lookup(entity, client):
     text = entity.name
     if "review" in text.lower():
         candidate = CandidateSummary(
-            legal_name=text, lei=REVIEW_LEI, status=text, country=text,
+            legal_name=text, lei=REVIEW_LEI, status="ISSUED", country=text,
             city=text, street=text, overall=61.0, legal_address=text,
             hq_address=text,
         )
@@ -104,7 +104,9 @@ def _exported_rows(client, job_id):
     csv_response = client.get(f"/download/csv?job={job_id}")
     assert csv_response.status_code == 200
     csv_text = csv_response.get_data(as_text=True)
-    csv_rows = list(csv.reader(io.StringIO(csv_text)))
+    # A byte-order mark first, so Excel reads the file as UTF-8.
+    assert csv_text.startswith("﻿")
+    csv_rows = list(csv.reader(io.StringIO(csv_text[1:])))
 
     for rows in (excel_rows, csv_rows):
         assert rows[0] == export.COLUMNS
@@ -157,7 +159,8 @@ def test_exports_drop_xml_illegal_characters(client, char):
 )
 def test_exports_drop_xml_illegal_characters_of_a_candidate(client, char):
     # A near-miss exports the lookup's notes; once the user confirms the
-    # candidate, its GLEIF name, status and addresses are exported.
+    # candidate, its GLEIF name and addresses are exported (its status
+    # is ISSUED: no other may be confirmed).
     expected = "Review Ltd" if char.isspace() else "ReviewLtd"
     job_id = _finished_job(client, entity_name=f"Review{char}Ltd")
     for rows in _exported_rows(client, job_id):
@@ -174,9 +177,9 @@ def test_exports_drop_xml_illegal_characters_of_a_candidate(client, char):
         assert (row["LEI"], row["Match_type"]) == (
             REVIEW_LEI, "MANUAL_MATCH",
         )
+        assert row["LEI_status"] == "ISSUED"
         for column in (
-            "LEI_status", "GLEIF_legal_name", "GLEIF_legal_address",
-            "GLEIF_hq_address",
+            "GLEIF_legal_name", "GLEIF_legal_address", "GLEIF_hq_address",
         ):
             assert row[column] == expected, column
 
@@ -194,11 +197,15 @@ def test_exports_neutralise_a_formula_behind_a_control_character(client):
 
 
 def _normalize_name_before_fix(name):
-    """normalize_name as of 5b0b3ae, the reference output."""
+    """normalize_name as of 5b0b3ae, the reference output.
+
+    Plus the invisible-character step added on 2026-09-30, which
+    changes the output on purpose (see test_precision_fixes.py).
+    """
     if not name:
         return ""
 
-    result = name.strip().lower()
+    result = address._drop_invisible(name.strip().lower())
 
     address._load_legal_forms()
     for pattern in address._LEGAL_FORM_PATTERNS:

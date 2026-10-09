@@ -14,6 +14,7 @@ name - a duplicate def is pylint E0102 and fails the build.
 
 import logging
 import math
+import re
 import secrets
 import time
 
@@ -28,6 +29,11 @@ from pydantic import ValidationError
 
 from main import bp_main
 from core import export, storage
+from core.constants import (
+    CITY_MATCH_THRESHOLD,
+    NAME_MATCH_THRESHOLD,
+    STREET_MATCH_THRESHOLD,
+)
 from core.gleif import (
     DeadlineExceeded,
     GleifApiError,
@@ -36,9 +42,25 @@ from core.gleif import (
     GleifRateLimited,
     GleifServerError,
 )
-from core.lookup import lookup_entity
-from core.models import InputEntity, InputError, LookupResult, is_blank
-from core.upload import parse_upload
+from core.lookup import (
+    STREET_WEIGHT,
+    ZIP_WEIGHT,
+    NOT_FOUND_NOTE,
+    lookup_entity,
+)
+from core.models import (
+    InputEntity,
+    InputError,
+    LookupResult,
+    MatchType,
+    has_acceptable_candidate,
+    is_blank,
+    is_issued,
+    shown_note,
+    standing_decision,
+)
+from core.openfigi import OpenFigiUnavailable
+from core.upload import parse_pasted_rows, parse_upload
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +81,54 @@ def request_too_large(error):
         "error": "The request is too large (max 4 MB).",
         "error_cs": "Požadavek je příliš velký (max. 4 MB).",
     }, 413
+
+
+#: Pages that change as a job runs and decisions are saved. Back must
+#: fetch them again: from the HTTP cache the results page showed saved
+#: decisions as undecided and old counts (no-cache is not enough there,
+#: browsers still reuse the copy on Back). Named by endpoint, as their
+#: paths start with URL_PREFIX.
+_NO_STORE_ENDPOINTS = (
+    "main.results", "main.download_csv", "main.download_excel",
+)
+
+
+# On the blueprint: Flask runs it for every request routed to one of
+# its views, also when an error handler built the reply (a 404 for an
+# unknown job, the 503 below), so it covers every endpoint it marks.
+@bp_main.after_request
+def no_store_live_pages(response):
+    """Keep browsers from reusing a stale results page or export."""
+    if request.endpoint in _NO_STORE_ENDPOINTS:
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+#: The page's API calls, answered in JSON. Named by endpoint, as their
+#: paths start with URL_PREFIX.
+_API_ENDPOINTS = ("main.create_job", "main.run_job", "main.decision")
+
+
+@bp_main.app_errorhandler(storage.StoreUnavailable)
+def store_unavailable(error):
+    """Answer 503 when the store has no database to keep searches in.
+
+    core/storage.py raises StoreUnavailable then, so every store-backed
+    route ends up here: JSON for the page's API calls, plain text for a
+    page navigation.
+    """
+    message = {
+        "error": "The search store is not available. Please try again "
+                 "later.",
+        "error_cs": "Úložiště vyhledávání není dostupné. Zkuste to prosím "
+                    "později.",
+    }
+    if request.endpoint in _API_ENDPOINTS:
+        return message, 503
+    return (
+        f"{message['error']}\n{message['error_cs']}\n", 503,
+        {"Content-Type": "text/plain; charset=utf-8"},
+    )
 
 
 # Allowed bulk-upload extensions. The browser checks this too, but a
@@ -86,6 +156,10 @@ RUN_DEADLINE_SECONDS = 120
 #: that one bad entity cannot stall the job for ever.
 RUN_MAX_ATTEMPTS = 3
 
+#: Seconds the page waits before the next /run call after OpenFIGI
+#: failed without a rate limit (a server error, no answer).
+OPENFIGI_PAUSE_SECONDS = 10
+
 GLEIF_DOWN_MESSAGE = "GLEIF service is unavailable. Please try again later."
 GLEIF_DOWN_MESSAGE_CS = "Služba GLEIF je nedostupná. Zkuste to prosím později."
 
@@ -107,6 +181,10 @@ GLEIF_TOO_SLOW_NOTE = (
     "Lookup failed: the GLEIF search took too long - LEI not assigned. "
     "Please search this entity again later."
 )
+OPENFIGI_ERRORS_NOTE = (
+    "Lookup failed: OpenFIGI kept failing - LEI not assigned. Please "
+    "search this entity again later."
+)
 
 
 # strict_slashes=False: the bare prefix ("/lei-lookup") serves the page
@@ -117,15 +195,28 @@ def index():
     return render_template("index.html")
 
 
+#: Searches per /admin page. A 100-entity search takes some 300 KB of
+#: the page, so the whole table on one page would grow without bound.
+ADMIN_PAGE_SIZE = 5
+
+
 @bp_main.route("/admin")
 def admin():
     """Unlinked page dumping the whole searches table (no auth).
 
     Not reachable from any link - the URL has to be typed. It renders
-    every column and row of the searches table and nothing else.
+    every column of the searches table, ADMIN_PAGE_SIZE rows a page
+    (``?page=``, newest first), and nothing else.
     """
-    columns, rows = storage.get_all_searches()
-    return render_template("admin.html", columns=columns, rows=rows)
+    page = max(request.args.get("page", 1, type=int), 1)
+    # One row more than a page, to tell whether an older page exists.
+    columns, rows = storage.get_all_searches(
+        ADMIN_PAGE_SIZE + 1, (page - 1) * ADMIN_PAGE_SIZE,
+    )
+    return render_template(
+        "admin.html", columns=columns, rows=rows[:ADMIN_PAGE_SIZE],
+        page=page, older=len(rows) > ADMIN_PAGE_SIZE,
+    )
 
 
 def _entity_input(entity: InputEntity) -> dict:
@@ -170,13 +261,14 @@ def _bucket_counts(results: list) -> dict:
     """Count looked-up rows per bucket: matched / to validate / miss.
 
     Every row lands in exactly one bucket: an asserted match, a
-    near-miss with candidates to validate, or an outright miss.
+    near-miss with a candidate the user may accept (see
+    core.models.has_acceptable_candidate), or a miss.
     """
     matched = need_validation = unmatched = 0
     for row in results:
         if (row.get("match") or {}).get("lei"):
             matched += 1
-        elif row.get("closest"):
+        elif has_acceptable_candidate(row.get("closest") or []):
             need_validation += 1
         else:
             unmatched += 1
@@ -268,9 +360,19 @@ def _bulk_entities() -> list[InputEntity]:
     return parse_upload(filename, upload.read())
 
 
+def _pasted_entities() -> list[InputEntity]:
+    """The entities of the rows pasted into the bulk form.
+
+    Raises:
+        InputError: With the message to show when the rows are unusable.
+    """
+    return parse_pasted_rows(request.form.get("rows", ""))
+
+
 @bp_main.route("/api/jobs", methods=["POST"])
 def create_job():
-    """Create a search job from the single form or a bulk upload.
+    """Create a search job from the single form, a bulk upload or rows
+    pasted into the bulk form (``mode`` "single", "bulk" or "paste").
 
     Validates the input and stores the entities to look up under a new
     ``job_id`` (nothing is looked up yet). Returns ``{"job_id", "total"}``,
@@ -278,9 +380,15 @@ def create_job():
     Czech) when the input is unusable, so the search page can show it
     next to its Search button.
     """
-    mode = "bulk" if request.form.get("mode") == "bulk" else "single"
+    mode = request.form.get("mode")
     try:
-        entities = _bulk_entities() if mode == "bulk" else _single_entities()
+        if mode == "bulk":
+            entities = _bulk_entities()
+        elif mode == "paste":
+            entities = _pasted_entities()
+        else:
+            mode = "single"
+            entities = _single_entities()
     except ValueError as error:
         # An InputError carries its Czech version; any other error only
         # has its own text.
@@ -357,6 +465,8 @@ def _lookup_row(
         GleifApiError: If GLEIF is unavailable or rate-limiting; a
             cut-off of a lookup that waiting out rate limits left
             short of time is a GleifRateLimited too.
+        OpenFigiUnavailable: If OpenFIGI rate-limits, or fails while
+            the entity has attempts left.
     """
     client.rate_limit_waits = []
     started = time.monotonic()
@@ -394,6 +504,15 @@ def _lookup_row(
         return _failed_row(entity, GLEIF_TOO_SLOW_NOTE)
     except GleifApiError:
         raise
+    except OpenFigiUnavailable as exc:
+        # A rate limit is not the entity's fault and costs no attempt;
+        # a server error or no answer does, so the job still ends.
+        if exc.retry_after is not None or not _gave_up(job_id, index):
+            raise
+        logger.warning(
+            "Giving up on entity %d of job %s: %s", index, job_id, exc
+        )
+        return _failed_row(entity, OPENFIGI_ERRORS_NOTE)
     except Exception:
         # A bug or a reply of a shape nobody expected: retrying the
         # entity would only fail the same way again.
@@ -413,8 +532,11 @@ def run_job(job_id: str):
     completed and answers 503 with an ``error`` message (and its Czech
     ``error_cs``), so a later call resumes from there. When GLEIF
     rate-limits for longer than the call has left, the reply is the
-    progress plus ``throttled`` and ``retry_after`` (the seconds to
-    wait before the next call). Once RUN_TIME_BUDGET_SECONDS have
+    progress plus ``throttled``, ``retry_after`` (the seconds to wait
+    before the next call) and ``service`` ("GLEIF"); an OpenFIGI rate
+    limit or failure pauses the job the same way ("OpenFIGI"), and an
+    entity OpenFIGI keeps failing on is stored as failed after
+    RUN_MAX_ATTEMPTS calls. Once RUN_TIME_BUDGET_SECONDS have
     passed no further lookup starts, and the one under way must end by
     RUN_DEADLINE_SECONDS. A lookup cut off by that deadline is not
     stored and the next call starts it again, while one that failed
@@ -437,6 +559,7 @@ def run_job(job_id: str):
     rows = []
     gleif_down = False
     retry_after = None
+    paused_by = "GLEIF"
     started = time.monotonic()
     with GleifClient() as client:
         client.deadline = started + RUN_DEADLINE_SECONDS
@@ -468,6 +591,11 @@ def run_job(job_id: str):
                 logger.exception("GLEIF lookup failed: %s", exc)
                 gleif_down = True
                 break
+            except OpenFigiUnavailable as exc:
+                logger.warning("OpenFIGI lookup paused: %s", exc)
+                retry_after = exc.retry_after or OPENFIGI_PAUSE_SECONDS
+                paused_by = "OpenFIGI"
+                break
             if time.monotonic() - started > RUN_TIME_BUDGET_SECONDS:
                 break
 
@@ -491,6 +619,7 @@ def run_job(job_id: str):
             **progress,
             "throttled": True,
             "retry_after": math.ceil(retry_after),
+            "service": paused_by,
         }
     return progress
 
@@ -501,8 +630,10 @@ def download_csv():
     search = storage.get_search(request.args.get("job", ""))
     if search is None:
         abort(404)
+    # The byte-order mark makes Excel read the file as UTF-8: without
+    # it, Czech Excel takes it for cp1250 and "ČEZ" opens as "ÄŚEZ".
     return Response(
-        export.build_csv(search),
+        "﻿" + export.build_csv(search),
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=results.csv"},
     )
@@ -525,6 +656,99 @@ def download_excel():
     )
 
 
+#: "c/o" (care of) in a GLEIF street: the office of an agent, such as a
+#: registered agent (CSC in Wilmington for many US companies), not the
+#: entity's own, so a searched address rarely matches it.
+_CARE_OF = re.compile(r"\bc/o\b", re.IGNORECASE)
+
+
+def _display_flags(warnings: list, street: str | None) -> list:
+    """A matched row's flags: its warnings, plus AGENT_ADDRESS if "c/o".
+
+    AGENT_ADDRESS is the results page's own flag, not a lookup warning:
+    the downloads show the "c/o" in the GLEIF address itself.
+    """
+    if street and _CARE_OF.search(street):
+        return [*warnings, "AGENT_ADDRESS"]
+    return warnings
+
+
+#: The gates a review candidate's scores are coloured by: the matcher's
+#: own (core/constants.py). The address score is street and ZIP
+#: agreement, so it is held to the street's.
+_SCORE_GATES = {
+    "name": NAME_MATCH_THRESHOLD,
+    "city": CITY_MATCH_THRESHOLD,
+    "address": STREET_MATCH_THRESHOLD,
+}
+
+
+def _shown_score(value, comparable: bool) -> dict:
+    """A score as the stepper shows it: its value and pass / fail / na.
+
+    "na" (shown as a dash) when there is nothing to compare, which
+    differs from a disagreement. The value is cut to a whole number,
+    not rounded: the colour follows the matcher's gate on the exact
+    score, so 74.6 must not read as a red 75.
+    """
+    if not comparable or not isinstance(value, (int, float)):
+        return {"value": None, "state": "na"}
+    return {"value": math.floor(value), "state": value}
+
+
+def _stored_address_score(source: dict, candidate: dict):
+    """A candidate's address score; rebuilt for one stored without it.
+
+    Candidates stored before 2026-10-06 have no ``address_score``: it is
+    rebuilt from their street and ZIP scores, over the fields the
+    searched row gave, with the weights of core/lookup._street_zip_score
+    (whether GLEIF had a ZIP was not stored, so it may read low).
+    """
+    if "address_score" in candidate:
+        return candidate["address_score"]
+    parts = []
+    if (source.get("street") or "").strip():
+        parts.append((candidate.get("street_score") or 0, STREET_WEIGHT))
+    if (source.get("postal_code") or "").strip():
+        parts.append((candidate.get("zip_score") or 0, ZIP_WEIGHT))
+    if not parts:
+        return None
+    total = sum(weight for _, weight in parts)
+    return sum(score * weight for score, weight in parts) / total
+
+
+def _review_candidate(source: dict, candidate: dict) -> dict:
+    """A stored candidate as the validation stepper shows it.
+
+    Adds its name, city and address scores (see _shown_score) and
+    whether the user may accept it: only an ISSUED LEI may be (see
+    core.models.is_issued); any other is shown only to be seen.
+    """
+    scores = {
+        "name": _shown_score(
+            candidate.get("name_score"),
+            bool(source.get("name")) or bool(candidate.get("name_score")),
+        ),
+        "city": _shown_score(
+            candidate.get("city_score"),
+            bool((source.get("city") or "").strip() and candidate.get("city")),
+        ),
+        "address": _shown_score(
+            _stored_address_score(source, candidate),
+            _stored_address_score(source, candidate) is not None,
+        ),
+    }
+    for kind, score in scores.items():
+        if score["value"] is not None:
+            passed = score["state"] >= _SCORE_GATES[kind]
+            score["state"] = "pass" if passed else "fail"
+    return {
+        **candidate,
+        "scores": scores,
+        "usable": is_issued(candidate.get("status")),
+    }
+
+
 def _candidate_by_lei(closest: list, lei) -> dict | None:
     """The stored candidate with this LEI, or None if absent."""
     for candidate in closest:
@@ -536,10 +760,14 @@ def _candidate_by_lei(closest: list, lei) -> dict | None:
 def _partition(results: list) -> dict:
     """Sort stored rows into matched / no-match / to-validate groups.
 
-    A row is "to validate" when it has candidates but no algorithmic
-    match. Such a row also appears under matched (if a candidate was
-    confirmed) or no-match (if marked "none"), so the bottom tables show
-    the current state while the stepper stays navigable for changes.
+    A row is "to validate" when it has no algorithmic match and a
+    candidate the user may accept (an ISSUED LEI: see
+    core.models.has_acceptable_candidate); a row whose candidates are
+    all stopped by their status has nothing to decide, and is a
+    no-match. A row to validate also appears under matched (if a
+    candidate was confirmed) or no-match (if marked "none"), so the
+    bottom tables show the current state while the stepper stays
+    navigable for changes.
 
     Args:
         results: The stored per-entity result rows.
@@ -557,15 +785,26 @@ def _partition(results: list) -> dict:
         source = row.get("input", {})
         match = row.get("match", {})
         closest = row.get("closest", [])
-        decision = row.get("decision") or {}
+        decision = standing_decision(row)
         algo_lei = match.get("lei")
+        reviewable = not algo_lei and has_acceptable_candidate(closest)
 
-        if closest and not algo_lei:
+        if reviewable:
             to_validate.append({
                 "index": index,
                 "input": source,
-                "closest": closest,
+                "closest": [
+                    _review_candidate(source, candidate)
+                    for candidate in closest
+                ],
                 "decision": decision or None,
+                # Why it was not matched (an OpenFIGI issuer name, an
+                # HQ-only address...), shown above the candidates; the
+                # plain "not found" would only contradict them.
+                "notes": (
+                    None if match.get("notes") == NOT_FOUND_NOTE
+                    else match.get("notes")
+                ),
             })
 
         if algo_lei:
@@ -575,8 +814,18 @@ def _partition(results: list) -> dict:
                 "country": match.get("gleif_legal_country"),
                 "city": match.get("gleif_legal_city"),
                 "street": match.get("gleif_legal_street"),
-                "overall": match.get("confidence"),
                 "lei": algo_lei,
+                "status": match.get("lei_status"),
+                "warnings": _display_flags(
+                    match.get("warnings") or [],
+                    match.get("gleif_legal_street"),
+                ),
+                # How a match through the ISIN was made. A full match
+                # needs no note: the row shows the legal address.
+                "notes": (
+                    None if match.get("match_type") == MatchType.FULL_MATCH
+                    else match.get("notes")
+                ),
             })
         elif decision.get("status") == "confirmed":
             candidate = _candidate_by_lei(closest, decision.get("lei"))
@@ -587,16 +836,20 @@ def _partition(results: list) -> dict:
                     "country": candidate.get("country"),
                     "city": candidate.get("city"),
                     "street": candidate.get("street"),
-                    "overall": candidate.get("overall"),
                     "lei": candidate.get("lei"),
+                    "status": candidate.get("status"),
+                    "warnings": _display_flags([], candidate.get("street")),
+                    "notes": None,
                 })
 
-        if decision.get("status") == "none" or (not algo_lei and not closest):
+        if decision.get("status") == "none" or (
+            not algo_lei and not reviewable
+        ):
             no_match.append({
                 "searched": source.get("name") or source.get("isin"),
                 "country": source.get("country"),
                 "city": source.get("city"),
-                "notes": match.get("notes"),
+                "notes": shown_note(row),
             })
 
     done = sum(1 for record in to_validate if record["decision"])

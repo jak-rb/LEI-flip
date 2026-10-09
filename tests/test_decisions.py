@@ -89,7 +89,7 @@ def _review_row(lei):
     return {
         "input": {"name": lei},
         "match": {"lei": None},
-        "closest": [{"lei": lei}],
+        "closest": [{"lei": lei, "status": "ISSUED"}],
     }
 
 
@@ -211,7 +211,7 @@ def test_decisions_only_on_finished_jobs_and_rows_to_validate():
     matched = {
         "input": {"name": "m"},
         "match": {"lei": MATCH_LEI},
-        "closest": [{"lei": RUNNER_UP_LEI}],
+        "closest": [{"lei": RUNNER_UP_LEI, "status": "ISSUED"}],
     }
     missed = {"input": {"name": "x"}, "match": {"lei": None}, "closest": []}
     job_id = _store_job([matched, _review_row(REVIEW_LEI)], total=3)

@@ -4,7 +4,8 @@ A small web tool for finding a company's Legal Entity Identifier (LEI)
 in the [GLEIF](https://www.gleif.org/) database. A user can run a
 single lookup (an entity name or an ISIN, optionally with address
 fields to narrow the result) or a bulk lookup by uploading an
-`.xlsx`, `.csv`, `.tsv` or `.txt` file of entities. Matching is deterministic and
+`.xlsx`, `.csv`, `.tsv` or `.txt` file of entities, or by pasting a few
+rows copied from Excel. Matching is deterministic and
 precision-first (no LLM): it asserts a LEI only when the name and legal
 address agree, or an ISIN resolves the identity; weaker hits are
 surfaced for manual review.
@@ -30,7 +31,7 @@ Configuration); the bare `/` redirects there when a prefix is set.
 | `POST /api/decision` | Record a manual match decision |
 | `GET /download/csv?job=<id>` | Export a search as CSV |
 | `GET /download/excel?job=<id>` | Export a search as Excel |
-| `GET /admin` | Full dump of the `searches` table (internal, unlinked) |
+| `GET /admin` | The `searches` table, 5 searches a page (internal, unlinked) |
 | `GET /static/main/...` | Stylesheet, script and images |
 | `GET /health` | Liveness probe, never prefixed (returns `{"status": "UP"}`) |
 
@@ -59,14 +60,15 @@ src/
     notes.py          # Czech versions of the lookup notes
     storage.py        # search store: SQLite, or Postgres (DATABASE_URL)
     export.py         # build CSV / Excel from a stored search
-    upload.py         # parse an uploaded .xlsx/.csv/.tsv/.txt into entities
+    upload.py         # parse an uploaded .xlsx/.csv/.tsv/.txt or pasted rows
   main/               # the bp_main blueprint
     __init__.py       # bp_main (owns templates/, static/, data/)
     routes.py         # every route except /health
     templates/        # Jinja2 templates (base, index, results, admin)
     static/           # styles.css, app.js, img/
     data/             # committed lookup tables
-      country_mapping.json   # country name (cs/en) -> ISO alpha-2
+      country_mapping.json   # country name (cs/en/native) -> ISO alpha-2
+      country_alpha3.json    # ISO alpha-3 code -> alpha-2
       legal_forms.txt        # legal-form suffixes stripped before matching
 tests/                # pytest suite (SQLite store, faked GLEIF)
 scripts/check.ps1     # local readiness check: pylint gate, routes, pytest

@@ -115,32 +115,47 @@
                  data-chosen="{{ rec.decision.lei if rec.decision
                                  and rec.decision.status == 'confirmed'
                                  else '' }}">
+            {# Everything the row gave, so each candidate can be compared
+               with it: the name (or the ISIN), then each filled field. #}
+            {% set given = [
+                ('ISIN', 'ISIN', rec.input.isin if rec.input.name else None),
+                ('Country', 'Země', rec.input.country),
+                ('City', 'Město', rec.input.city),
+                ('Street', 'Ulice', rec.input.street),
+                ('Postal code', 'PSČ', rec.input.postal_code),
+            ] %}
             <p class="detail-searched">
                 <span data-cs="Hledali jste:" data-en="You searched:">You searched:</span>
                 <strong>{{ rec.input.name or rec.input.isin }}</strong>
-                {% set place = [rec.input.country or '',
-                                rec.input.city or '']
-                               |map('trim')|select|join(', ') %}
-                {% if place %}({{ place }}){% endif %}
+                {% for en, cs, value in given if value and value.strip() %}
+                <span class="searched-field"><span class="searched-label" data-en="{{ en }}" data-cs="{{ cs }}">{{ en }}</span> {{ value.strip() }}</span>
+                {% endfor %}
             </p>
+            {% if rec.notes %}
+            <p class="detail-note"
+               data-en="{{ rec.notes }}"
+               data-cs="{{ rec.notes|czech_note }}">{{ rec.notes }}</p>
+            {% endif %}
 
             <div class="results-table-wrap">
                 <table class="results-table candidates-table">
                     <thead>
                         <tr>
                             <th class="col-expand"></th>
-                            <th data-cs="Právní název" data-en="Legal name">Legal name</th>
+                            <th class="col-name" data-cs="Právní název" data-en="Legal name">Legal name</th>
                             <th data-cs="Země" data-en="Country">Country</th>
                             <th data-cs="Město" data-en="City">City</th>
-                            <th data-cs="Ulice" data-en="Street">Street</th>
+                            <th class="col-score" data-cs="Skóre názvu" data-en="Name score">Name score</th>
+                            <th class="col-score" data-cs="Skóre města" data-en="City score">City score</th>
+                            <th class="col-score" data-cs="Skóre adresy" data-en="Address score">Address score</th>
+                            <th data-cs="Stav LEI" data-en="LEI status">LEI status</th>
                             <th>GLEIF</th>
-                            <th class="col-overall" data-cs="Celková shoda" data-en="Overall match">Overall match</th>
                             <th class="col-confirm"></th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for c in rec.closest %}
-                        <tr class="candidate-row" data-lei="{{ c.lei }}">
+                        <tr class="candidate-row{% if not c.usable %} is-stopped{% endif %}" data-lei="{{ c.lei }}">
                             <td class="col-expand">
                                 <button type="button" class="candidate-expand"
                                         aria-expanded="false"
@@ -150,27 +165,44 @@
                                     <span class="chevron" aria-hidden="true"></span>
                                 </button>
                             </td>
-                            <td>{{ c.legal_name }}</td>
+                            <td class="col-name">{{ c.legal_name }}</td>
                             <td>{{ c.country }}</td>
                             <td>{{ c.city }}</td>
-                            <td>{{ c.street }}</td>
+                            {% for kind in ['name', 'city', 'address'] %}
+                            {% set score = c.scores[kind] %}
+                            <td class="col-score score-{{ score.state }}">{{ score.value if score.value is not none else '–' }}</td>
+                            {% endfor %}
+                            <td>
+                                {% if c.usable %}
+                                <span class="lei-status lei-status-ok">{{ c.status }}</span>
+                                {% else %}
+                                <span class="lei-status lei-status-stop"
+                                      title="This LEI cannot be used: for information only"
+                                      data-en-title="This LEI cannot be used: for information only"
+                                      data-cs-title="Toto LEI nelze použít: jen pro informaci"><span aria-hidden="true">!</span> {{ c.status }}</span>
+                                {% endif %}
+                            </td>
                             <td>
                                 <a class="gleif-link"
                                    href="https://search.gleif.org/#/record/{{ c.lei }}"
                                    target="_blank" rel="noopener"
                                    data-cs="Zobrazit ↗" data-en="View ↗">View &#8599;</a>
                             </td>
-                            <td class="col-overall">{{ c.overall|round|int }}%</td>
                             <td class="col-confirm">
+                                {% if c.usable %}
                                 <button type="button"
                                         class="btn candidate-confirm"
-                                        data-cs="Správná shoda" data-en="Correct match">
-                                    Correct match
+                                        data-cs="Přijmout" data-en="Accept">
+                                    Accept
                                 </button>
+                                {% else %}
+                                <span class="view-only"
+                                      data-cs="Jen k nahlédnutí" data-en="View only">View only</span>
+                                {% endif %}
                             </td>
                         </tr>
                         <tr class="candidate-detail" hidden>
-                            <td colspan="8">
+                            <td colspan="10">
                                 <dl class="candidate-detail-fields">
                                     <dt>LEI</dt>
                                     <dd class="cell-lei">{{ c.lei }}</dd>
@@ -181,10 +213,10 @@
                                     <dd>{{ c.hq_address or "-" }}</dd>
                                     <dt data-cs="Skóre polí" data-en="Field scores">Field scores</dt>
                                     <dd>
-                                        <span data-cs="Název" data-en="Name">Name</span> {{ c.name_score|round|int }} &middot;
-                                        <span data-cs="Město" data-en="City">City</span> {{ c.city_score|round|int }} &middot;
-                                        <span data-cs="Ulice" data-en="Street">Street</span> {{ c.street_score|round|int }} &middot;
-                                        <span data-cs="PSČ" data-en="ZIP">ZIP</span> {{ c.zip_score|round|int }}
+                                        <span data-cs="Název" data-en="Name">Name</span> {{ c.name_score|int }} &middot;
+                                        <span data-cs="Město" data-en="City">City</span> {{ c.city_score|int }} &middot;
+                                        <span data-cs="Ulice" data-en="Street">Street</span> {{ c.street_score|int }} &middot;
+                                        <span data-cs="PSČ" data-en="ZIP">ZIP</span> {{ c.zip_score|int }}
                                     </dd>
                                 </dl>
                             </td>
@@ -214,6 +246,27 @@
     {% endif %}
 
     <!-- Matched records -->
+    {# A row flags a non-ISSUED LEI status and every warning but
+       CHECK_FAILED (a missing street or ZIP, on most rows) and
+       LAPSED_STATUS (the status flag says it); the CSV/Excel export
+       carries them all. A match through the ISIN also shows its note,
+       which says how it was made and so where to check it, and a
+       "c/o" street gets the page's own AGENT_ADDRESS flag
+       (main.routes._display_flags). #}
+    {% set hidden_flags = ['LAPSED_STATUS', 'CHECK_FAILED'] %}
+    {% set flag_labels = {
+        'AMBIGUOUS_MATCH': ('Several similar LEIs', 'Více podobných LEI'),
+        'ADDRESS_CONTRADICTION': ('Street and ZIP differ', 'Ulice a PSČ nesouhlasí'),
+        'ISIN_ONLY': ('Matched by ISIN', 'Shoda přes ISIN'),
+        'ISIN_VIA_OPENFIGI': ('ISIN via OpenFIGI', 'ISIN přes OpenFIGI'),
+        'UNVERIFIED_ADDRESS': ('Address not verified', 'Adresa neověřena'),
+        'NAME_UNVERIFIED': ('Name not checked', 'Název neověřen'),
+        'HQ_ONLY_MATCH': ('HQ address only', 'Jen adresa centrály'),
+        'COUNTRY_UNVERIFIED': ('Country not checked', 'Země neověřena'),
+        'COUNTRY_MISMATCH': ('Country differs', 'Země nesouhlasí'),
+        'SINGLE_CANDIDATE_HEURISTIC': ('Single strong name hit', 'Jediná silná shoda názvu'),
+        'AGENT_ADDRESS': ("Agent's address (c/o)", 'Adresa zástupce (c/o)'),
+    } %}
     <h3 class="zone-title zone-matched" data-cs="Spárované záznamy" data-en="Matched records">Matched records</h3>
     {% if groups.matched %}
     <div class="results-table-wrap">
@@ -226,14 +279,36 @@
                     <th data-cs="Město" data-en="City">City</th>
                     <th data-cs="Ulice" data-en="Street">Street</th>
                     <th>GLEIF</th>
-                    <th data-cs="Celková shoda" data-en="Overall match">Overall match</th>
                 </tr>
             </thead>
             <tbody>
                 {% for m in groups.matched %}
+                {% set shown = m.warnings|reject('in', hidden_flags)|list %}
                 <tr>
                     <td>{{ m.searched }}</td>
-                    <td>{{ m.legal_name }}</td>
+                    <td>
+                        {{ m.legal_name }}
+                        {% if (m.status and m.status != 'ISSUED') or shown %}
+                        <span class="match-flags">
+                            {% if m.status and m.status != 'ISSUED' %}
+                            <span class="match-flag match-flag-status"
+                                  data-en="LEI {{ m.status }}"
+                                  data-cs="LEI {{ m.status }}">LEI {{ m.status }}</span>
+                            {% endif %}
+                            {% for code in shown %}
+                            {% set label = flag_labels.get(code) or (code, code) %}
+                            <span class="match-flag"
+                                  data-en="{{ label[0] }}"
+                                  data-cs="{{ label[1] }}">{{ label[0] }}</span>
+                            {% endfor %}
+                        </span>
+                        {% endif %}
+                        {% if m.notes %}
+                        <span class="match-note"
+                              data-en="{{ m.notes }}"
+                              data-cs="{{ m.notes|czech_note }}">{{ m.notes }}</span>
+                        {% endif %}
+                    </td>
                     <td>{{ m.country }}</td>
                     <td>{{ m.city }}</td>
                     <td>{{ m.street }}</td>
@@ -242,11 +317,6 @@
                            href="https://search.gleif.org/#/record/{{ m.lei }}"
                            target="_blank" rel="noopener"
                            data-cs="Zobrazit ↗" data-en="View ↗">View &#8599;</a>
-                    </td>
-                    <td>
-                        {% if m.overall is not none %}
-                        {{ m.overall|round|int }}%
-                        {% else %}-{% endif %}
                     </td>
                 </tr>
                 {% endfor %}

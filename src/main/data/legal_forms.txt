@@ -1,6 +1,34 @@
 a.s.
 s.r.o.
 s. r. o.
+a. s.
+spol. s r.o.
+spol. s r. o.
+spol.s r.o.
+spol. s.r.o.
+k. s.
+v. o. s.
+společnost s ručením omezeným
+kom. spol.
+komanditní společnost
+komanditni spolecnost
+veřejná obchodní společnost
+verejna obchodni spolecnost
+akciová spoločnosť
+akciova spolocnost
+spoločnosť s ručením obmedzeným
+spolocnost s rucenim obmedzenym
+zrt.
+zrt
+nyrt.
+nyrt
+jsc
+pjsc
+ojsc
+cjsc
+v likvidaci
+v likvidácii
+v likvidacii
 plc
 plc.
 ltd
@@ -115,3 +143,8 @@ kabushiki
 kaisha
 k.k.
 proprietary
+sicav - raif
+sicav - sif
+sicav-raif
+sicav-sif
+raif

@@ -9,6 +9,7 @@ from rapidfuzz import fuzz
 from .address import (
     country_to_iso,
     extract_zip,
+    is_legal_form,
     normalize_address_part,
     normalize_name,
 )
@@ -38,27 +39,140 @@ _NAME_STOPWORDS = frozenset({
     "die", "das", "la", "le", "el", "du", "des", "et", "y", "a",
 })
 
+# Single-letter roman numerals that serve as entity serials ("Series
+# I", "Fund V"). "Investec Fund Series" locked onto "Ninety One Funds
+# Series I" at 98.6 when the "I" was dropped as noise while "II"/"IV"
+# were kept (fixed the same way in the original tool on 2026-09-18).
+_ROMAN_SINGLE = frozenset({"i", "v", "x"})
+
+# Words after which a single letter is a serial ("Compartment B",
+# "Series C"), like a letter after a number ("Trust 2023-A").
+_SERIAL_WORDS = frozenset({
+    "fund", "funds", "fond", "fonds", "series", "serie", "compartment",
+    "class", "tranche", "trust", "portfolio", "funding", "programme",
+    "program",
+})
+
+
+#: Letter runs that are legal designations the legal-form list does not
+#: strip (it would strip them from every name): "N.A." (a US national
+#: bank), "S.C.A.", "S.C.S.", "L.P.", "S.A.B. de C.V." and the Slovak
+#: pension company types "d.s.s." and "d.d.s.". In mid-name they are
+#: noise like the rest of the legal form, not initials; at the start of
+#: a name ("L.P. Holdings") they are initials like any other. (The
+#: Slovak fund types a.d.f. / i.d.f. / d.d.f. do tell funds apart, so
+#: stay tokens.)
+_LEGAL_FORM_INITIALS = frozenset({
+    "na", "sca", "scs", "scsp", "lp", "sab", "cv", "dss", "dds",
+})
+
+
+class _Initials(str):
+    """A token joined from initials ("F.D." -> "fd").
+
+    It needs its exact twin to count as covered (see _token_covered): a
+    longer acronym that merely starts alike ("ABCDE" for "A.B.C.D.") is
+    another name.
+    """
+
+
+def _is_letter(word: str) -> bool:
+    """Whether a word is a single letter, as initials leave them."""
+    return len(word) == 1 and word.isalpha()
+
+
+def _initials_run(words: list[str], start: int) -> tuple[int, bool]:
+    """The run of single letters at ``start``: its end, and if initials.
+
+    Two or more single letters in a row ("F.D." normalizes to "f d")
+    are initials, as in "EURO F.D. HOLDINGS", and tell that entity
+    apart from "Euro Holdings" exactly as a word would. Not initials,
+    so read letter by letter as before, are a run that spells a legal
+    form the patterns did not strip ("P.L.C." in mid-name, "a.s.;") and
+    a run with nothing after it but more letters and connectives: a
+    legal form the list does not know ("..., L.P.", "Citibank, N.A.",
+    "S.A.B. de C.V.").
+    """
+    end = start
+    while end < len(words) and _is_letter(words[end]):
+        end += 1
+    letters = words[start:end]
+    trailing = all(
+        _is_letter(word) or word in _NAME_STOPWORDS for word in words[end:]
+    )
+    initials = not (
+        len(letters) < 2 or trailing
+        or start > 0 and "".join(letters) in _LEGAL_FORM_INITIALS
+        or is_legal_form("".join(letters))
+        or is_legal_form(".".join(letters) + ".")
+    )
+    return end, initials
+
 
 def _significant_tokens(normalized: str) -> list[str]:
     """Entity-distinguishing tokens of an already-normalized name."""
-    # Single-character fragments are dropped EXCEPT digit-bearing ones:
-    # serially-numbered entity families (e.g. "Tesco Property Finance 1
-    # PLC" vs "... 3 PLC") are distinguished ONLY by that serial, so
-    # dropping it would collapse them into a confident wrong match.
-    # Keeping any token containing a digit preserves the serial as a
-    # distinguishing token. Legal forms are already removed upstream.
-    cleaned = normalized.replace("&", " and ").replace("-", " ")
+    # Single-character fragments are dropped EXCEPT serials and
+    # initials: serially numbered entity families ("Tesco Property
+    # Finance 1 PLC" vs "3 PLC", "Fund V" vs "Fund X", "Trust 2023-A" vs
+    # "2023-B") are told apart ONLY by that serial, so dropping it would
+    # collapse them into a confident wrong match. A digit-bearing token,
+    # a roman I/V/X and a letter right after a number or a serial word
+    # are kept - even "a", otherwise a stopword. The cost: a Czech "v"
+    # or Polish "i" on one side only now counts as distinguishing, which
+    # gives NO_MATCH with details, never a wrong LEI. Initials inside a
+    # name are kept as one token (see _initials_run). Legal forms are
+    # removed upstream.
+    # Initials are looked for before "&" is spelled out, so the letters
+    # of "J&T" or "AT&T" never join a run.
+    words = normalized.replace("-", " ").split()
     tokens = []
-    for token in cleaned.split():
-        if token in _NAME_STOPWORDS:
-            continue
-        if len(token) >= 2 or any(c.isdigit() for c in token):
-            tokens.append(token)
+    previous = ""
+    index = 0
+    while index < len(words):
+        if _is_letter(words[index]) and not _after_serial(previous):
+            end, initials = _initials_run(words, index)
+            if initials:
+                tokens.append(_Initials("".join(words[index:end])))
+                previous = words[end - 1]
+                index = end
+                continue
+            # Not initials: each letter of the run on its own, as before.
+            chunk = words[index:end]
+            index = end
+        else:
+            chunk = [words[index]]
+            index += 1
+        for token in " ".join(chunk).replace("&", " and ").split():
+            serial_letter = _is_letter(token) and _after_serial(previous)
+            previous = token
+            if serial_letter or token in _ROMAN_SINGLE:
+                tokens.append(token)
+            elif token in _NAME_STOPWORDS:
+                continue
+            # A letter standing alone ("Firma B a. s.", the letters of
+            # "M&M") tells siblings apart as a word would; only letters
+            # of a run that is no initials (a legal form, a trailing
+            # "N.A.") are dropped.
+            elif (
+                len(token) >= 2 or any(c.isdigit() for c in token)
+                or len(chunk) == 1 and token.isalpha()
+            ):
+                tokens.append(token)
     return tokens
+
+
+def _after_serial(previous: str) -> bool:
+    """Whether a letter after this token is a serial ("2023-A", "Fund B")."""
+    return any(c.isdigit() for c in previous) or previous in _SERIAL_WORDS
 
 
 def _token_covered(token: str, others: list[str]) -> bool:
     """Whether ``token`` has a fuzzy counterpart among ``others``."""
+    # Joined initials, and any short token, need their exact twin: at
+    # three letters one more is still 85.7 alike, and neither "A.B.C."
+    # nor "ABC" is "ABCD".
+    if isinstance(token, _Initials) or len(token) <= 3:
+        return token in others
     return any(
         fuzz.ratio(token, o) >= _TOKEN_COVER_THRESHOLD for o in others
     )
@@ -97,6 +211,12 @@ def name_similarity(input_name: str, gleif_name: str) -> float:
     s1 = n1.replace("&", " and ").replace("-", " ")
     s2 = n2.replace("&", " and ").replace("-", " ")
 
+    # The same letters spaced differently ("J.P. Morgan" and "JPMorgan",
+    # "EuroHoldings" and "Euro-Holdings") are the same name, whatever
+    # tokens the spacing makes.
+    if s1.replace(" ", "") == s2.replace(" ", ""):
+        return 100.0
+
     # token_set_ratio handles reordering; ratio handles spelling
     # closeness. partial_ratio is excluded - it is the substring bug.
     base = float(max(fuzz.token_set_ratio(s1, s2), fuzz.ratio(s1, s2)))
@@ -104,9 +224,11 @@ def name_similarity(input_name: str, gleif_name: str) -> float:
     t1 = _significant_tokens(n1)
     t2 = _significant_tokens(n2)
     if not t1 or not t2:
-        # One side reduced to only connectives/legal forms - fall back
-        # to the plain string ratio, conservative for such inputs.
-        return float(fuzz.ratio(s1, s2))
+        # One side reduced to only connectives/legal forms: nothing on it
+        # can confirm the name, so the plain string ratio is capped below
+        # the gate like any unconfirmed pair ("M & M" was 88.9 alike to
+        # "M & N"). The same name spelled otherwise passed above.
+        return min(float(fuzz.ratio(s1, s2)), AMBIGUOUS_NAME_CAP)
 
     uncovered = [t for t in t1 if not _token_covered(t, t2)]
     uncovered += [t for t in t2 if not _token_covered(t, t1)]
@@ -136,6 +258,38 @@ def best_name_score(entity: InputEntity, candidate: GleifCandidate) -> float:
         scores.append(name_similarity(entity.name, other_name))
 
     return max(scores)
+
+
+def shares_name_word(input_name: str, candidate: GleifCandidate) -> bool:
+    """Whether a candidate's names share a distinctive word with input.
+
+    A candidate whose name agrees only in its legal form ("FISS, spol.
+    s r.o." and "BRŮZA spol. s r.o.") or in connectives is no near-miss
+    at all, so the review offers only candidates that pass this. A name
+    that clears the name gate always passes, though its words may be
+    split otherwise ("Raiffeisen Bank" / "Raiffeisenbank"); and an input
+    with no distinctive word left (only a legal form) passes everything,
+    as before.
+
+    Args:
+        input_name: The user-provided entity name.
+        candidate: A GLEIF candidate record.
+
+    Returns:
+        True if one of the candidate's legal or other names clears the
+        name gate, or has a fuzzy counterpart of a significant token of
+        the input.
+    """
+    wanted = _significant_tokens(normalize_name(input_name))
+    if not wanted:
+        return True
+    for name in (candidate.legal_name, *candidate.other_names):
+        if name_similarity(input_name, name) >= NAME_MATCH_THRESHOLD:
+            return True
+        tokens = _significant_tokens(normalize_name(name))
+        if any(_token_covered(token, tokens) for token in wanted):
+            return True
+    return False
 
 
 def city_similarity(

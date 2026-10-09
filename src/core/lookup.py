@@ -9,10 +9,16 @@ returned as NO_MATCH with the near-miss details for manual review.
 """
 
 import logging
+import math
 from typing import Optional
 
 from .address import country_to_iso
-from .constants import AMBIGUITY_CONFIDENCE_DELTA, LAPSED_STATUSES
+from .constants import (
+    ADDRESS_CONTRADICTION_CAP,
+    ADDRESS_CORROBORATION_MIN,
+    AMBIGUITY_CONFIDENCE_DELTA,
+    LAPSED_STATUSES,
+)
 from .gleif import GleifClient
 from .isin import normalize_isin, resolve_isin_only, resolve_via_isin
 from .matcher import (
@@ -22,21 +28,25 @@ from .matcher import (
     address_match_score,
     best_name_score,
     name_similarity,
+    shares_name_word,
 )
 from .models import (
     CandidateSummary,
+    GleifAddress,
     GleifCandidate,
     InputEntity,
     LookupResult,
     MatchType,
     WarningCode,
+    is_issued,
+    stopped_note,
 )
 from .openfigi import resolve_isin_to_names
 
 logger = logging.getLogger(__name__)
 
-#: Minimum address score (0-100) for an address to corroborate a name.
-ADDRESS_CORROBORATION_MIN = 40
+#: The note of a search that found nothing better to say.
+NOT_FOUND_NOTE = "No LEI found in the GLEIF database."
 
 #: Name score at/above which a candidate is a "strong" name hit.
 STRONG_NAME_SCORE = 85
@@ -49,12 +59,18 @@ VERY_STRONG_NAME_SCORE = 92
 CLOSEST_CANDIDATE_LIMIT = 3
 
 #: Display-only weights for a candidate's overall match percent. They
-#: blend name and address agreement for the validation table and never
-#: gate a match (unlike the audit-validated thresholds in constants.py).
-#: The 60/40 split mirrors the 2:1 name-to-address ratio in a matched
-#: result's confidence bonus.
+#: blend name and address agreement to order the validation table and
+#: never gate a match (unlike the audit-validated thresholds in
+#: constants.py). The 60/40 split mirrors the 2:1 name-to-address ratio
+#: in a matched result's confidence bonus.
 OVERALL_NAME_WEIGHT = 0.6
 OVERALL_ADDRESS_WEIGHT = 0.4
+
+#: The matcher's weights of street and ZIP in an address score (see
+#: core/matcher.address_match_score), reused for the review table's
+#: "Address" score.
+STREET_WEIGHT = 0.35
+ZIP_WEIGHT = 0.25
 
 
 def _overall_match(name_score: float, address_score: float) -> float:
@@ -68,6 +84,27 @@ def _overall_match(name_score: float, address_score: float) -> float:
         name_score * OVERALL_NAME_WEIGHT
         + address_score * OVERALL_ADDRESS_WEIGHT
     )
+
+
+def _street_zip_score(
+    entity: InputEntity, address: Optional[GleifAddress], details: dict
+) -> Optional[float]:
+    """The review table's address score: street and ZIP agreement.
+
+    Weighted as the matcher weighs the two, over the parts both the
+    entity and the candidate's address carry, so a missing ZIP neither
+    helps nor hurts. None when they share neither: there is nothing to
+    compare, which differs from a disagreement (0).
+    """
+    parts = []
+    if entity.street and address and address.address_lines:
+        parts.append((details.get("street_score", 0), STREET_WEIGHT))
+    if entity.zip_code and address and address.postal_code:
+        parts.append((details.get("zip_score", 0), ZIP_WEIGHT))
+    if not parts:
+        return None
+    total = sum(weight for _, weight in parts)
+    return sum(score * weight for score, weight in parts) / total
 
 
 def _apply_common_warnings(
@@ -85,7 +122,10 @@ def _apply_common_warnings(
         if WarningCode.CHECK_FAILED.value not in warnings:
             warnings.append(WarningCode.CHECK_FAILED.value)
 
-    if not entity.country:
+    # Also for a country given but not recognised ("DEU" before the
+    # alpha-3 table, a misspelling): it filtered nothing and was checked
+    # against nothing, so it is as unverified as an empty one.
+    if country_to_iso(entity.country) is None:
         if WarningCode.COUNTRY_UNVERIFIED.value not in warnings:
             warnings.append(WarningCode.COUNTRY_UNVERIFIED.value)
 
@@ -113,7 +153,8 @@ def lookup_entity(
 ) -> tuple[LookupResult, list[CandidateSummary]]:
     """Run the name + address matching pipeline for one entity.
 
-    Searches GLEIF by name (narrowing by country when known), scores
+    Searches GLEIF by name (narrowing by country when known, and
+    falling back to GLEIF's fuzzy search when nothing is found), scores
     every candidate with the matcher, and classifies the outcome
     precision-first: a confident FULL_MATCH asserts the LEI, while
     weaker name-only or HQ-only hits stay NO_MATCH unless the entity's
@@ -128,7 +169,8 @@ def lookup_entity(
 
     Returns:
         A ``(result, closest)`` tuple: the chosen LookupResult plus up
-        to two runner-up candidates (by name score) for manual review.
+        to CLOSEST_CANDIDATE_LIMIT runner-up candidates for manual
+        review.
 
     Raises:
         GleifApiError: If GLEIF cannot be reached. The caller renders
@@ -139,15 +181,61 @@ def lookup_entity(
         "Looking up: %s (country: %s, ISIN: %s)",
         entity.name, entity.country, entity.isin,
     )
+    result, closest = _lookup(entity, client)
+    return _name_stopped_records(result, closest), closest
 
+
+def _name_stopped_records(
+    result: LookupResult, closest: list[CandidateSummary]
+) -> LookupResult:
+    """Name the records of a no-match whose candidates are all stopped.
+
+    Its plain note ("No LEI found", "manual review is needed", "listed
+    for review") would hide them: the row has nothing to accept, so the
+    page files it as a no-match and shows only its note (see
+    core.models.stopped_note). A note about a record of its own (the
+    result names one, as a stopped full match or an HQ-only near-miss
+    does) is kept.
+    """
+    if result.lei or result.lei_status or result.gleif_legal_name:
+        return result
+    note = stopped_note([candidate.model_dump() for candidate in closest])
+    if note is not None:
+        result.notes = note
+    return result
+
+
+def _lookup(
+    entity: InputEntity, client: GleifClient
+) -> tuple[LookupResult, list[CandidateSummary]]:
+    """The pipeline of lookup_entity, before stopped records are named."""
     # ISIN-only input: with no name to search or score by, resolve the
     # LEI authoritatively from the ISIN; when GLEIF's mapping has no
     # record of it, fall back to a softer OpenFIGI review (both below).
     if not entity.name:
-        result = resolve_isin_only(entity, client)
-        if result is not None:
-            return result, []
-        return _isin_only_openfigi_review(entity, client)
+        resolved = resolve_isin_only(entity, client)
+        if resolved is None:
+            return _isin_only_openfigi_review(entity, client)
+        result, to_review = resolved
+        # A multi-LEI mapping, or one record whose LEI is not ISSUED:
+        # the records the ISIN maps to go to the review (a stopped one
+        # only to be seen). No name was given, so only the address
+        # fields (if any) score.
+        # ISSUED records first (in GLEIF's order otherwise), so stopped
+        # ones never crowd them out.
+        to_review = sorted(
+            to_review, key=lambda candidate: not is_issued(candidate.status),
+        )
+        closest = []
+        for candidate in to_review[:CLOSEST_CANDIDATE_LIMIT]:
+            addr_score, details = address_match_score(
+                entity, candidate, "legal"
+            )
+            closest.append(_build_candidate_summary(
+                entity, candidate, 0, addr_score, details,
+            ))
+        closest.sort(key=lambda summary: summary.overall, reverse=True)
+        return result, closest
 
     iso_country = country_to_iso(entity.country)
     isin_country = _isin_country(entity.isin)
@@ -163,26 +251,43 @@ def lookup_entity(
     if not candidates and (iso_country or isin_country):
         logger.info("Retrying with no country filter.")
         candidates = client.search_by_name_no_country(entity.name)
+    # GLEIF's filters match whole words, so a misspelled name finds
+    # nothing; the matcher still decides what its suggestions are.
+    if not candidates:
+        logger.info("Retrying with GLEIF's fuzzy name search.")
+        candidates = client.search_by_fuzzy_name(entity.name)
 
     if not candidates:
         logger.info("No GLEIF candidates for %s", entity.name)
-        result = (
-            resolve_via_isin(entity, client)
-            or _no_match("No LEI found in the GLEIF database.")
+        result, to_review = resolve_via_isin(entity, client)
+        result = result or _no_match(NOT_FOUND_NOTE)
+        return result, _closest_candidates(
+            entity, to_review, result.lei,
+            pinned=to_review[0].lei if to_review else None,
         )
-        return result, []
 
-    result = _classify_candidates(entity, candidates, client)
-    closest = _closest_candidates(entity, candidates, result.lei)
+    result, to_review = _classify_candidates(entity, candidates, client)
+    closest = _closest_candidates(
+        entity, to_review + candidates, result.lei,
+        pinned=to_review[0].lei if to_review else None,
+    )
     return result, closest
 
 
 def _classify_candidates(
     entity: InputEntity, candidates: list[GleifCandidate], client: GleifClient
-) -> LookupResult:
-    """Score the candidates and return the precision-first verdict."""
-    best_full_match: Optional[LookupResult] = None
-    full_match_leis: list[tuple[str, float]] = []
+) -> tuple[LookupResult, list[GleifCandidate]]:
+    """Score the candidates and return the precision-first verdict.
+
+    Returns:
+        The verdict, and the candidates to keep in the review: first the
+        record a NO_MATCH verdict is about, if any (a stopped full match,
+        the OpenFIGI fallback's candidate, an HQ-only or name-only
+        near-miss), which the review then always offers, as its note
+        names it; the OpenFIGI fallback's may be one the name search
+        lacks.
+    """
+    full_matches: list[LookupResult] = []
     best_hq_candidate: Optional[GleifCandidate] = None
     best_hq_score = 0.0
     best_hq_name_score = 0.0
@@ -208,8 +313,9 @@ def _classify_candidates(
             # Active street+zip contradiction: name+city matched, but
             # the input street AND zip are both present, the candidate
             # carries both, and both disagree (the shared registered-
-            # agent case). Flag it and shave confidence so a clean
-            # match wins. Missing street/zip data is NOT penalized.
+            # agent case). Flag it and cap confidence below 80 so a
+            # clean match wins and a ">= 80" filter never includes it.
+            # Missing street/zip data is NOT penalized.
             la = candidate.legal_address
             street_s = legal_details.get("street_score", 0)
             contradiction = (
@@ -220,7 +326,7 @@ def _classify_candidates(
                 and legal_details.get("zip_score", 0) == 0
             )
             if contradiction:
-                confidence = min(confidence, 80.0)
+                confidence = min(confidence, ADDRESS_CONTRADICTION_CAP)
 
             result = LookupResult(
                 lei=candidate.lei,
@@ -251,12 +357,7 @@ def _classify_candidates(
             contradiction_code = WarningCode.ADDRESS_CONTRADICTION.value
             if contradiction and contradiction_code not in result.warnings:
                 result.warnings = result.warnings + [contradiction_code]
-            full_match_leis.append((candidate.lei, confidence))
-            if (
-                best_full_match is None
-                or confidence > best_full_match.confidence
-            ):
-                best_full_match = result
+            full_matches.append(result)
 
         # Track the best HQ-only address match even when legal matched.
         hq_score, hq_details = address_match_score(entity, candidate, "hq")
@@ -275,19 +376,32 @@ def _classify_candidates(
             best_name_candidate = candidate
             best_name_score_val = ns
 
-    if best_full_match:
-        return _finalize_full_match(best_full_match, full_match_leis)
+    full_match = _finalize_full_match(full_matches)
+    if full_match:
+        return full_match, []
 
     # An ISIN can resolve a LEI directly or corroborate a near-miss.
+    isin_result, to_review = None, []
     if entity.isin:
-        isin_result = resolve_via_isin(
+        isin_result, to_review = resolve_via_isin(
             entity, client,
             hq_candidate=best_hq_candidate,
             name_candidate=best_name_candidate,
         )
-        if isin_result:
+        if isin_result and isin_result.lei:
             logger.info("ISIN resolution succeeded: %s", isin_result.lei)
-            return isin_result
+            return isin_result, []
+
+    # Name and legal address agree, but every such LEI is stopped by its
+    # status (see core.models.is_issued): say so rather than "not found".
+    if full_matches:
+        stopped = max(full_matches, key=lambda match: match.confidence)
+        record = next(c for c in candidates if c.lei == stopped.lei)
+        return _not_usable_no_match(stopped), [record, *to_review]
+
+    # The OpenFIGI fallback found a candidate whose address did not agree.
+    if isin_result:
+        return isin_result, to_review
 
     # An HQ-only address match (no legal-address agreement) is never a
     # positive match without ISIN confirmation - precision-first. Report
@@ -296,35 +410,88 @@ def _classify_candidates(
         return _hq_only_no_match(
             entity, best_hq_candidate, best_hq_score,
             best_hq_name_score, best_hq_details,
-        )
+        ), [best_hq_candidate, *to_review]
 
     # A single very strong, unique name hit with no address
     # corroboration is also not asserted; surfaced as NO_MATCH for
     # manual review.
     name_only = _name_only_no_match(entity, candidates)
     if name_only:
-        return name_only
+        result, record = name_only
+        return result, [record, *to_review]
 
-    return _no_match("No LEI found in the GLEIF database.")
+    return _no_match(NOT_FOUND_NOTE), to_review
 
 
 def _finalize_full_match(
-    result: LookupResult, full_match_leis: list[tuple[str, float]]
-) -> LookupResult:
-    """Flag an ambiguous full match, log, and return it."""
-    # If two or more DISTINCT LEIs cleared the gate within a small
-    # band of the winner, we may be asserting the wrong sibling.
-    near_leis = {
-        lei
-        for lei, conf in full_match_leis
-        if conf >= result.confidence - AMBIGUITY_CONFIDENCE_DELTA
+    full_matches: list[LookupResult],
+) -> Optional[LookupResult]:
+    """Pick the full match to assert, flag ambiguity, log, return it.
+
+    Only an ISSUED LEI within AMBIGUITY_CONFIDENCE_DELTA of the best
+    full match is asserted (see core.models.is_issued): None when there
+    is none, as every full match near the top is stopped by its status.
+    """
+    # Only the matches within a small band of the best are in the
+    # running: a clean match on a stopped LEI must not hand the match to
+    # a far worse ISSUED one (say, one whose street and ZIP contradict
+    # the input). Of those, the highest ISSUED confidence wins, the first
+    # one GLEIF listed on a tie; a dead twin (a DUPLICATE, or an old
+    # RETIRED LEI next to a re-registration) scores the same on name and
+    # address, and is never chosen.
+    if not full_matches:
+        return None
+    top = max(match.confidence for match in full_matches)
+    usable = [
+        match for match in full_matches
+        if is_issued(match.lei_status)
+        and match.confidence >= top - AMBIGUITY_CONFIDENCE_DELTA
+    ]
+    if not usable:
+        return None
+    result = max(usable, key=lambda match: match.confidence)
+    # If another DISTINCT LEI cleared the gate within a small band of
+    # the winner (or above it, stopped by its status), we may be
+    # asserting the wrong sibling.
+    rivals = {
+        match.lei for match in full_matches
+        if match.lei != result.lei
+        and match.confidence >= result.confidence - AMBIGUITY_CONFIDENCE_DELTA
     }
     ambiguous_code = WarningCode.AMBIGUOUS_MATCH.value
-    if len(near_leis) >= 2 and ambiguous_code not in result.warnings:
+    if rivals and ambiguous_code not in result.warnings:
         result.warnings = result.warnings + [ambiguous_code]
-        logger.info("FULL_MATCH ambiguous among %d LEIs", len(near_leis))
+        logger.info("FULL_MATCH ambiguous among %d LEIs", len(rivals) + 1)
     logger.info("FULL_MATCH found: %s", result.lei)
     return result
+
+
+def _not_usable_no_match(stopped: LookupResult) -> LookupResult:
+    """NO_MATCH for a full match whose LEI is not ISSUED.
+
+    The name and legal address agree, so the record is the entity, but
+    its LEI cannot be used (reviewers, 2026-10-06: anything other than
+    ISSUED is a stop). The record's details stay for the note and the
+    downloads; the LEI itself is left out.
+    """
+    return LookupResult(
+        match_type=MatchType.NO_MATCH,
+        lei_status=stopped.lei_status,
+        gleif_legal_name=stopped.gleif_legal_name,
+        gleif_legal_address=stopped.gleif_legal_address,
+        gleif_hq_address=stopped.gleif_hq_address,
+        notes=(
+            f"Name and legal address match {stopped.gleif_legal_name} "
+            f"(LEI {stopped.lei}), but its LEI status is "
+            f"{stopped.lei_status} - the LEI cannot be used and was not "
+            f"assigned."
+        ),
+        match_details=stopped.match_details,
+        warnings=[
+            code for code in stopped.warnings
+            if code != WarningCode.AMBIGUOUS_MATCH.value
+        ],
+    )
 
 
 def _hq_only_no_match(
@@ -344,8 +511,8 @@ def _hq_only_no_match(
     )
     status = candidate.status
     status_note = ""
-    if status and status.upper() in LAPSED_STATUSES:
-        status_note = f" LEI status: {status}."
+    if status and not is_issued(status):
+        status_note = f" LEI {candidate.lei} status: {status}."
 
     result = LookupResult(
         match_type=MatchType.NO_MATCH,
@@ -376,8 +543,8 @@ def _hq_only_no_match(
 
 def _name_only_no_match(
     entity: InputEntity, candidates: list[GleifCandidate]
-) -> Optional[LookupResult]:
-    """NO_MATCH for a lone very strong name hit, else None."""
+) -> Optional[tuple[LookupResult, GleifCandidate]]:
+    """NO_MATCH for a lone very strong name hit, with it; else None."""
     contenders = [(c, best_name_score(entity, c)) for c in candidates]
     ambiguous_pool = [(c, s) for c, s in contenders if s >= STRONG_NAME_SCORE]
     strong_hits = [
@@ -417,7 +584,8 @@ def _name_only_no_match(
         gleif_legal_address=legal_addr,
         gleif_hq_address=hq_addr,
         notes=(
-            f"Strong name match ({ns:.0f}%) with {candidate.legal_name}, "
+            f"Strong name match ({math.floor(round(ns, 1))}%) with "
+            f"{candidate.legal_name}, "
             f"but the address was not verified - LEI not assigned. Manual "
             f"review recommended."
         ),
@@ -428,10 +596,11 @@ def _name_only_no_match(
         ],
     )
     _apply_common_warnings(result, entity)
-    return result
+    return result, candidate
 
 
 def _build_candidate_summary(
+    entity: InputEntity,
     candidate: GleifCandidate,
     name_score: float,
     addr_score: float,
@@ -440,10 +609,13 @@ def _build_candidate_summary(
     """Assemble a review CandidateSummary from a candidate and its scores.
 
     The overall percent is the name-weighted (60/40) blend of the given
-    name and address scores; the address sub-scores and the full legal
-    and HQ addresses back the validation row's expandable detail.
+    name and address scores, which orders the candidates; the
+    legal-address sub-scores (``details``), the street and ZIP score
+    (see _street_zip_score) and the full legal and HQ addresses back the
+    validation row and its expandable detail.
     """
     address = candidate.legal_address or candidate.hq_address
+    street_zip = _street_zip_score(entity, candidate.legal_address, details)
     return CandidateSummary(
         legal_name=candidate.legal_name,
         lei=candidate.lei,
@@ -456,6 +628,9 @@ def _build_candidate_summary(
         city_score=round(details.get("city_score", 0), 1),
         street_score=round(details.get("street_score", 0), 1),
         zip_score=round(details.get("zip_score", 0), 1),
+        address_score=(
+            None if street_zip is None else round(street_zip, 1)
+        ),
         legal_address=(
             candidate.legal_address.format()
             if candidate.legal_address else None
@@ -472,36 +647,92 @@ def _closest_candidates(
     candidates: list[GleifCandidate],
     exclude_lei: Optional[str],
     limit: int = CLOSEST_CANDIDATE_LIMIT,
+    pinned: Optional[str] = None,
 ) -> list[CandidateSummary]:
     """Top runner-up candidates for the validation table, minus the LEI.
 
     The set is chosen by name score (the top ``limit``, excluding the
-    matched LEI), then returned sorted by overall match percent, highest
-    first, to match the table's display order. Each summary also carries
-    the legal-address sub-scores and an overall match percent (see
-    _overall_match), so the validation table shows a richer row than the
-    name score alone and its expandable detail can show the full
-    addresses.
+    matched LEI and any candidate that shares no distinctive word with
+    the name, as one matching only in its legal form: see
+    core/matcher.shares_name_word), then returned sorted by overall
+    match percent, highest first. Each summary also carries the
+    legal-address sub-scores, so the validation table shows the name,
+    city and address scores and its expandable detail the full
+    addresses. A candidate listed twice (the ISIN paths may find one the
+    name search found too) is taken once. The candidate whose LEI is
+    ``pinned`` (the record the verdict's note names) is always offered.
     """
+    # The first of each LEI, in the order given: on a tie in name score,
+    # GLEIF's own order decides, as it always has.
+    unique: dict[str, GleifCandidate] = {}
+    for candidate in candidates:
+        unique.setdefault(candidate.lei, candidate)
     scored = sorted(
-        ((best_name_score(entity, c), c) for c in candidates),
+        (
+            (best_name_score(entity, c), c) for c in unique.values()
+            if c.lei != exclude_lei and shares_name_word(entity.name, c)
+        ),
         key=lambda pair: pair[0],
         reverse=True,
     )
     closest: list[CandidateSummary] = []
-    for name_score, candidate in scored:
-        if candidate.lei == exclude_lei:
-            continue
+    picked = _keep_pinned(
+        scored, _keep_an_issued(scored, limit), pinned, limit,
+    )
+    for name_score, candidate in picked:
         addr_score, details = address_match_score(entity, candidate, "legal")
         closest.append(
             _build_candidate_summary(
-                candidate, name_score, addr_score, details
+                entity, candidate, name_score, addr_score, details
             )
         )
-        if len(closest) >= limit:
-            break
     closest.sort(key=lambda summary: summary.overall, reverse=True)
     return closest
+
+
+def _keep_an_issued(
+    scored: list[tuple[float, GleifCandidate]], limit: int
+) -> list[tuple[float, GleifCandidate]]:
+    """The first ``limit`` of ``scored``, keeping an ISSUED candidate.
+
+    Stopped records are only to be seen: when they fill every place
+    while an ISSUED candidate is further down, that one takes the last
+    place, so the review never hides the only candidates that may be
+    accepted (and the row is not called one of stopped records).
+    """
+    picked = scored[:limit]
+    if any(is_issued(candidate.status) for _, candidate in picked):
+        return picked
+    issued = next(
+        (pair for pair in scored[limit:] if is_issued(pair[1].status)), None,
+    )
+    return picked[:limit - 1] + [issued] if issued else picked
+
+
+def _keep_pinned(
+    scored: list[tuple[float, GleifCandidate]],
+    picked: list[tuple[float, GleifCandidate]],
+    pinned: Optional[str],
+    limit: int,
+) -> list[tuple[float, GleifCandidate]]:
+    """``picked``, holding the candidate whose LEI is ``pinned``.
+
+    A note naming one record above other same-named ones must not stand
+    over a review that offers only those (so a user trusting the note
+    would accept another LEI). The pinned candidate takes the place of
+    the last stopped one, else of the last.
+    """
+    if pinned is None or any(c.lei == pinned for _, c in picked):
+        return picked
+    pair = next((p for p in scored if p[1].lei == pinned), None)
+    if pair is None:
+        return picked
+    if len(picked) < limit:
+        return picked + [pair]
+    for index in range(len(picked) - 1, -1, -1):
+        if not is_issued(picked[index][1].status):
+            return picked[:index] + picked[index + 1:] + [pair]
+    return picked[:-1] + [pair]
 
 
 def _name_vs_openfigi(figi_name: str, candidate: GleifCandidate) -> float:
@@ -521,8 +752,8 @@ def _isin_only_openfigi_review(
     authoritative mapping. Resolves the ISIN to issuer name(s) via
     OpenFIGI, searches GLEIF by each, and returns the closest matches as
     review candidates - scored against the OpenFIGI name, since there is
-    no user name to compare. Nothing is auto-asserted; a human confirms
-    on the results page.
+    no user name to compare, and sharing a distinctive word with it.
+    Nothing is auto-asserted; a human confirms on the results page.
 
     Args:
         entity: The name-less entity being looked up (carries an ISIN).
@@ -535,11 +766,14 @@ def _isin_only_openfigi_review(
     isin = normalize_isin(entity.isin)
     scored: list[tuple[float, GleifCandidate]] = []
     seen: set[str] = set()
-    for figi_name in resolve_isin_to_names(isin, deadline=client.deadline):
+    figi_names = resolve_isin_to_names(isin, deadline=client.deadline)
+    for figi_name in figi_names:
         for candidate in client.search_by_name(figi_name, page_size=5):
             if candidate.lei in seen:
                 continue
             seen.add(candidate.lei)
+            if not shares_name_word(figi_name, candidate):
+                continue
             scored.append(
                 (_name_vs_openfigi(figi_name, candidate), candidate)
             )
@@ -552,18 +786,20 @@ def _isin_only_openfigi_review(
 
     scored.sort(key=lambda pair: pair[0], reverse=True)
     closest: list[CandidateSummary] = []
-    for name_score, candidate in scored[:CLOSEST_CANDIDATE_LIMIT]:
+    for name_score, candidate in _keep_an_issued(
+        scored, CLOSEST_CANDIDATE_LIMIT,
+    ):
         addr_score, details = address_match_score(entity, candidate, "legal")
         closest.append(
             _build_candidate_summary(
-                candidate, name_score, addr_score, details
+                entity, candidate, name_score, addr_score, details
             )
         )
     closest.sort(key=lambda summary: summary.overall, reverse=True)
     result = _no_match(
         f"ISIN {isin} is not in GLEIF's authoritative mapping. OpenFIGI "
-        f"resolved it to an issuer name; the closest GLEIF matches are "
-        f"listed for review."
+        f"resolved it to the issuer {figi_names[0]}; the closest GLEIF "
+        f"matches are listed for review."
     )
     return result, closest
 

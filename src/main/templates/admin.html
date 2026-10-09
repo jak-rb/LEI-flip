@@ -35,6 +35,14 @@
         </style>
     </head>
     <body>
+        {% macro pages() %}
+        <p class="pages">
+            Page / Strana {{ page }}
+            {% if page > 1 %}&middot; <a href="?page={{ page - 1 }}">Newer / Novější</a>{% endif %}
+            {% if older %}&middot; <a href="?page={{ page + 1 }}">Older / Starší</a>{% endif %}
+        </p>
+        {% endmacro %}
+        {{ pages() }}
         <table>
             <thead>
                 <tr>
@@ -60,5 +68,6 @@
                 {% endfor %}
             </tbody>
         </table>
+        {{ pages() }}
     </body>
 </html>

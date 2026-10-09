@@ -1,11 +1,13 @@
 
 """Parse an uploaded .xlsx, .csv, .tsv or .txt file into entities.
 
-Columns are read by position, in the order the bulk form documents:
-Name, ISIN, Country, City, Street, Postal code. The first non-blank
-row is skipped when it holds column labels (a header), and so is a
-title row above a header. Uses openpyxl for .xlsx and the stdlib csv
-module for the text formats, so no extra dependency is needed.
+Rows pasted into the bulk form are parsed here too (see
+parse_pasted_rows). Columns are read by position, in the order the
+bulk form documents: Name, ISIN, Country, City, Street, Postal code.
+The first non-blank row is skipped when it holds column labels (a
+header), and so is a title row above a header. Uses openpyxl for .xlsx
+and the stdlib csv module for the text formats, so no extra dependency
+is needed.
 
 A row with a name or an ISIN is never dropped or cut short: one with a
 value over its length limit refuses the whole file, with a message
@@ -34,13 +36,13 @@ from openpyxl.utils.escape import unescape
 from pydantic import ValidationError
 from unidecode import unidecode
 
-from .address import country_to_iso
+from .address import country_to_iso, is_legal_form
 from .isin import is_valid_isin, normalize_isin
 from .models import InputEntity, InputError, is_blank
 
 logger = logging.getLogger(__name__)
 
-#: Maximum number of entities accepted in one bulk upload.
+#: Maximum number of entities accepted in one bulk upload or paste.
 MAX_ENTITIES = 100
 
 #: Columns in the documented order: position -> InputEntity field.
@@ -69,23 +71,32 @@ _LISTED_ROWS = 5
 #: all labels. A cell with any other word, such as a company name, is
 #: data.
 _HEADER_WORDS = frozenset({
-    # Name
-    "name", "entity", "company", "legal", "full", "party", "issuer",
-    "firm", "firma", "firmy", "nazev", "subjekt", "subjektu",
-    "obchodni", "jmeno", "emitent", "emitenta", "spolecnost",
-    "spolecnosti", "counterparty", "protistrana", "protistrany",
-    "client", "klient", "klienta", "customer",
+    # Name, also in the plural a one-column list is headed by
+    # ("Company names", "Názvy firem", "Klienti")
+    "name", "names", "entity", "entities", "company", "companies",
+    "legal", "full", "party", "issuer", "issuers", "firm", "firms",
+    "firma", "firmy", "firem", "nazev", "nazvy", "subjekt", "subjektu",
+    "subjekty", "obchodni", "jmeno", "emitent", "emitenta", "emitenti",
+    "spolecnost", "spolecnosti", "counterparty", "counterparties",
+    "protistrana", "protistrany", "protistran", "client", "clients",
+    "klient", "klienta", "klienti", "klientu", "customer", "customers",
     # ISIN
     "isin", "code", "kod", "ident", "identifier",
     # Address
     "country", "zeme", "stat", "city", "town", "mesto", "obec",
-    "street", "ulice", "address", "adresa", "addr", "line", "zip",
+    "street", "ulice", "address", "adresa", "addr", "zip",
     "postal", "postcode", "psc",
 })
 
+#: Words a numbered label ("Address 2", "ADDR_LINE_1") must hold one
+#: of: address lines are what a header numbers. "line" is no label on
+#: its own, as a company may be named "LINE".
+_NUMBERED_LABEL_WORDS = frozenset({"address", "adresa", "addr", "line"})
+
 #: A note in parentheses, such as "(optional)" in "ISIN (optional)":
-#: it says how to fill a column, not what the column is.
-_LABEL_NOTE = re.compile(r"\([^)]*\)")
+#: it says how to fill a column, not what the column is. No "(" inside
+#: it, or a cell of countless "(" takes hours to scan.
+_LABEL_NOTE = re.compile(r"\([^()]*\)")
 
 #: Most digits in the number of a numbered label ("Address 2"): a
 #: column number is short, a street number or postal code often not.
@@ -96,6 +107,9 @@ _ISIN_SHAPE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
 
 #: The longest ISIN cell InputEntity accepts.
 _ISIN_MAX_LENGTH = 20
+
+#: The longest postal code InputEntity accepts.
+_ZIP_MAX_LENGTH = 20
 
 #: Columns read from an .xlsx row whose column A holds a semicolon
 #: line: Excel split the line again at every comma, so rebuilding it
@@ -113,6 +127,21 @@ _LINE_COLUMNS = 50
 #: that it is parsed again and again.
 _MAX_READ_BYTES = 50 * 1024 * 1024
 _MAX_READ_NODES = 1_000_000
+
+#: Most XML nodes the stylesheet may hold, charged on top of the budget
+#: above. openpyxl builds objects for every style, at some 25
+#: microseconds a node, so 990,000 empty <xf/> in a 12 KB file took 23 s
+#: and 650 MB. Real workbooks have far fewer; this is room for some
+#: 25,000 cell formats (Excel allows 64,000 per workbook).
+_MAX_STYLE_NODES = 200_000
+
+#: openpyxl reads the stylesheet from this fixed part.
+_STYLES_PART = "xl/styles.xml"
+
+#: Longest number format code Excel saves. openpyxl rescans a format
+#: for every style that uses it, and the postal-code check reads it for
+#: every cell: one format of a million zeros in a 6 KB file took 325 s.
+_MAX_FORMAT_CODE = 255
 
 #: The last row of an Excel worksheet. A row numbered past it is not
 #: from Excel, and would make openpyxl yield every empty row before it.
@@ -139,6 +168,50 @@ _UNREADABLE_TEXT = (
     "nebo nahrajte soubor .xlsx.",
 )
 
+#: Shown (English, Czech) for pasted rows that cannot be read as rows.
+_UNREADABLE_PASTE = (
+    "Could not read the pasted rows: a cell is too long, or a quotation "
+    "mark is not closed.",
+    "Vložené řádky se nepodařilo přečíst: některá buňka je příliš "
+    "dlouhá, nebo v ní chybí uzavírací uvozovka.",
+)
+
+#: Shown (English, Czech) when no row holds a name or an ISIN.
+_NO_ENTITIES = (
+    "No entities found. Each row needs a name (first column) or an "
+    "ISIN (second column).",
+    "Nebyly nalezeny žádné subjekty. Každý řádek musí obsahovat název "
+    "(první sloupec) nebo ISIN (druhý sloupec).",
+)
+
+#: The line breaks the csv module knows, so that every reading of
+#: pasted text numbers its rows alike.
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
+
+#: Two or more whitespace characters: all that is left between the
+#: columns of rows copied from Excel once an e-mail or a chat has
+#: turned their tabs into spaces. Captured, as its width tells an empty
+#: cell (see _spaced_cells).
+_SPACED_COLUMNS = re.compile(r"(\s{2,})")
+
+#: The widest gap a doubled space inside a name leaves. A wider one is
+#: the trace of an empty cell: an e-mail that turns each tab into two
+#: spaces leaves four for an empty ISIN cell.
+_NAME_GAP = 3
+
+#: What an ISIN cell holds when there is none, lower-case, besides an
+#: Excel error value (#N/A, #NENÍ_K_DISPOZICI): what SQL exports write
+#: (NULL) and the usual typed ones. Not "NA" or "N.A.", which end the
+#: names of US banks.
+_NO_ISIN = frozenset({"-", "--", "0", "n/a", "null", "none", "nan"})
+
+#: A two-letter country code as exports write it.
+_COUNTRY_CODE = re.compile(r"[A-Z]{2}")
+
+#: The values of a spaced line searched for its ISIN or country: the
+#: name, maybe cut in a few pieces by doubled spaces, then the ISIN.
+_ANCHOR_WINDOW = 8
+
 
 def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
     """Parse uploaded bytes into entities.
@@ -158,8 +231,8 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
     if not content:
         raise InputError("The file is empty.", "Soubor je prázdný.")
 
-    # The part from the last dot, as main/routes.py checks it: to pathlib, a
-    # file named just ".csv" has no extension.
+    # The part from the last dot, as main/routes.py checks it: to
+    # pathlib, a file named just ".csv" has no extension.
     _, dot, ext = filename.lower().rpartition(".")
     ext = dot + ext
     if ext == ".xlsx":
@@ -176,13 +249,156 @@ def parse_upload(filename: str, content: bytes) -> list[InputEntity]:
 
     entities = _rows_to_entities(rows)
     if not entities:
-        raise InputError(
-            "No entities found. Each row needs a name (first column) or "
-            "an ISIN (second column).",
-            "Nebyly nalezeny žádné subjekty. Každý řádek musí obsahovat "
-            "název (první sloupec) nebo ISIN (druhý sloupec).",
-        )
+        raise InputError(*_NO_ENTITIES)
     return entities
+
+
+def parse_pasted_rows(text: str) -> list[InputEntity]:
+    """Parse rows pasted into the bulk form into entities.
+
+    Rows copied from Excel arrive tab-separated and are read like a
+    .tsv file, by position, so an empty ISIN cell keeps its place. Text
+    with no tab is read as semicolon-separated when each of its lines
+    holds a semicolon (lines copied from a CSV file), and otherwise a
+    line at a time (see _spaced_cells): rows whose tabs an e-mail
+    turned into spaces, or a column of names copied from Excel.
+
+    Args:
+        text: The pasted text.
+
+    Returns:
+        The parsed entities (rows with a name or an ISIN).
+
+    Raises:
+        InputError: For no text, no usable rows, more than MAX_ENTITIES
+            rows, or rows with a value over its length limit.
+    """
+    if is_blank(text):
+        raise InputError(
+            "Please paste the rows to look up.",
+            "Vložte prosím řádky k vyhledání.",
+        )
+    lines = _LINE_BREAK.split(text)
+    if "\t" in text:
+        rows = _read_text(text, "\t", _UNREADABLE_PASTE)
+    elif all(";" in line for line in lines if line.strip()) and not any(
+        gap > _NAME_GAP
+        for line in lines
+        for gap in map(len, _SPACED_COLUMNS.findall(line.strip()))
+    ):
+        # A wide gap is an e-mailed row's empty cell: its ";" is text.
+        rows = _read_text(text, ";", _UNREADABLE_PASTE)
+    else:
+        rows = _entity_rows(
+            (number, _spaced_cells(line))
+            for number, line in enumerate(lines, start=1)
+            if line.strip()
+        )
+    entities = _rows_to_entities(rows)
+    if not entities:
+        raise InputError(*_NO_ENTITIES)
+    return entities
+
+
+def _spaced_cells(line: str) -> list[str]:
+    """The cells of a pasted line that holds no tab.
+
+    Rows copied from Excel keep their columns only two or more spaces
+    apart once an e-mail or a chat has turned the tabs into spaces, and
+    a name may hold two spaces in a row too. Cutting a name short could
+    match its parent company, so the name ends only where the line
+    shows for sure: at a valid ISIN, at a country after a gap wider
+    than a doubled space (the trace of an empty ISIN cell), or at a
+    placeholder such as "#N/A" before a country; whatever stands before
+    is the name, joined by single spaces. Lacking all of them, a
+    country code right after the name ("Alfa a.s.  CZ  Praha") is taken
+    for the country, unless it is a legal form or "NA" or a legal form
+    follows it. Any other line, other than a header, is one value, the
+    name: a lost match, never a wrong one. A valid ISIN first has no
+    name before it.
+    """
+    parts = _SPACED_COLUMNS.split(line.strip())
+    fields, gaps = parts[0::2], [len(gap) for gap in parts[1::2]]
+    if _is_isin_token(fields[0]):
+        return ["", *fields]
+    if len(fields) == 1 or is_blank(fields[0]):
+        return fields
+    if (
+        _is_label(fields[0])
+        and (_is_label(fields[1]) or _is_isin_label(fields[1]))
+        or _is_isin_label(fields[1])
+        and _is_header(fields[:len(_COLUMNS)])
+    ):
+        return fields
+    # The costly check, a country name not in the mapping taking about
+    # a millisecond, is reached only on a line with a name: reading
+    # stops at the first one past MAX_ENTITIES.
+    code_before = False
+    placeholder = None
+    for index, value in enumerate(fields[1:_ANCHOR_WINDOW], start=1):
+        name = " ".join(fields[:index])
+        if gaps[index - 1] > _NAME_GAP and country_to_iso(value):
+            return _fit_address([name, "", *fields[index:]])
+        if placeholder:
+            continue
+        # Past a country code, a valid ISIN is a VAT number (SK, PL).
+        if not code_before and _is_isin_token(value):
+            return _fit_address([name, value, *fields[index + 1:]])
+        # Kept unless an empty cell's wider gap follows: a "-" may stand
+        # in a name too.
+        if (
+            _is_no_isin(value) and index + 1 < len(fields)
+            and country_to_iso(fields[index + 1])
+        ):
+            placeholder = [name, "", *fields[index + 1:]]
+        code_before = code_before or _is_country_code(value)
+    if placeholder:
+        return _fit_address(placeholder)
+    if (
+        max(gaps) <= _NAME_GAP and _is_country_code(fields[1])
+        and not (len(fields) > 2 and is_legal_form(fields[2]))
+    ):
+        return _fit_address([fields[0], "", *fields[1:]])
+    return [line.strip()]
+
+
+def _fit_address(cells: list[str]) -> list[str]:
+    """A spaced row's cells, its address dropped when it cannot fit.
+
+    A doubled space inside a city or a street moves the cells after it,
+    and a street that lands in the postal code would refuse the whole
+    paste. Without its address the row can only lose its match.
+    """
+    if len(cells) > 5 and len(cells[5]) > _ZIP_MAX_LENGTH:
+        return cells[:3]
+    return cells
+
+
+def _is_isin_token(value: str) -> bool:
+    """Whether a value is a valid ISIN written as one word."""
+    return not any(char.isspace() for char in value) and is_valid_isin(
+        value.upper()
+    )
+
+
+def _is_no_isin(value: str) -> bool:
+    """Whether an ISIN cell's value says there is none.
+
+    An Excel error value starts with "#" and a letter, in any language
+    (#N/A, #NENÍ_K_DISPOZICI); "#2" may end a fund's name.
+    """
+    return (
+        value.startswith("#") and value[1:2].isalpha()
+        or value.lower() in _NO_ISIN or _is_isin_label(value)
+    )
+
+
+def _is_country_code(value: str) -> bool:
+    """Whether a value is a two-letter code that is no name's ending."""
+    return (
+        bool(_COUNTRY_CODE.fullmatch(value)) and value != "NA"
+        and not is_legal_form(value)
+    )
 
 
 def _read_xlsx(content: bytes) -> list[_Row]:
@@ -201,6 +417,7 @@ def _read_xlsx(content: bytes) -> list[_Row]:
         sheet.reset_dimensions()
         if _holds_semicolon_lines(sheet):
             rows = _entity_rows(_split_semicolon_lines(sheet))
+            width = _LINE_COLUMNS
         else:
             decoded: dict[str, str] = {}
             rows = _entity_rows(
@@ -211,6 +428,8 @@ def _read_xlsx(content: bytes) -> list[_Row]:
                     sheet, len(_COLUMNS), _COLUMNS.index("zip_code")
                 )
             )
+            width = len(_COLUMNS)
+        _refuse_uncalculated(workbook, sheet, width)
         workbook.close()
     except _TooMuchData:
         logger.warning("Uploaded .xlsx needs more than the read budget")
@@ -234,6 +453,93 @@ def _read_xlsx(content: bytes) -> list[_Row]:
     return rows
 
 
+def _refuse_uncalculated(workbook, sheet, width: int) -> None:
+    """Refuse a sheet whose read columns hold formulas with no value.
+
+    An .xlsx is read as Excel shows it (openpyxl's data_only), from the
+    values Excel saved with each formula. A workbook written by a script,
+    or never calculated, has formulas with no saved value: they read as
+    empty, and their rows would vanish without a word.
+
+    Raises:
+        InputError: Naming the first such cells.
+    """
+    archive = workbook._archive
+    cells = [
+        cell
+        for cell in archive.uncalculated.get(sheet._worksheet_path, [])
+        if _column_number(cell) <= width
+    ]
+    if not cells:
+        return
+    listed = ", ".join(cells[:_LISTED_ROWS])
+    if len(cells) > _LISTED_ROWS:
+        listed += ", ..."
+    raise InputError(
+        f"Cells {listed} hold formulas with no calculated value, so they "
+        "read as empty. Open the file in Excel and save it again, or "
+        "paste the values instead of the formulas.",
+        f"Buňky {listed} obsahují vzorce bez spočítané hodnoty, takže "
+        "se čtou jako prázdné. Otevřete soubor v Excelu a znovu ho "
+        "uložte, nebo místo vzorců vložte hodnoty.",
+    )
+
+
+def _column_number(cell: str) -> int:
+    """The column number of a cell reference: "C7" is 3."""
+    number = 0
+    for char in cell:
+        if not char.isalpha():
+            break
+        number = number * 26 + ord(char.upper()) - ord("A") + 1
+    return number
+
+
+class _UncalculatedFormulas:
+    """Collect a worksheet part's formula cells that have no value.
+
+    Fed the part as the guard's expat parser reads it: a cell (<c
+    r="A2">) with a formula (<f>) but no value text is recorded by its
+    reference. An empty <v> is a value only in a cell typed "str": that
+    is how Excel saves a formula whose result is the empty string, while
+    openpyxl saves every formula with an empty <v> and no type.
+    """
+
+    def __init__(self) -> None:
+        self.cells: list[str] = []
+        self._cell = ""
+        self._formula = self._value = self._in_value = False
+
+    def start(self, name, attributes) -> None:
+        """Note a cell, its formula or its value opening."""
+        name = name.rpartition(":")[2]
+        if name == "c":
+            self._cell = attributes.get("r", "")
+            self._formula = False
+            self._value = attributes.get("t") == "str"
+        elif name == "f":
+            self._formula = True
+        elif name == "v":
+            self._in_value = True
+        elif name == "is":
+            self._value = True
+
+    def text(self, data) -> None:
+        """Note value text inside a <v>."""
+        if self._in_value and data.strip():
+            self._value = True
+
+    def end(self, name) -> None:
+        """Record a closing cell that had a formula and no value."""
+        name = name.rpartition(":")[2]
+        if name == "v":
+            self._in_value = False
+        elif name == "c":
+            if self._formula and not self._value:
+                self.cells.append(self._cell)
+            self._formula = False
+
+
 class _TooMuchData(Exception):
     """An .xlsx made openpyxl read more than the read budget allows.
 
@@ -249,13 +555,17 @@ class _GuardedArchive(zipfile.ZipFile):
     bytes handed out, and the XML nodes in them, counted by an expat
     parser of its own (openpyxl parses with expat too). A part with a
     DTD is refused: Office Open XML parts never have one, and its
-    entities could blow a small part up to gigabytes of text.
+    entities could blow a small part up to gigabytes of text. The same
+    parser collects each worksheet's formula cells that have no value
+    (``uncalculated``, by part name; see _refuse_uncalculated).
     """
 
     def __init__(self, file) -> None:
         super().__init__(file)
         self._bytes_left = _MAX_READ_BYTES
         self._nodes_left = _MAX_READ_NODES
+        self._style_nodes_left = _MAX_STYLE_NODES
+        self.uncalculated: dict[str, list[str]] = {}
 
     def open(self, name, mode="r", pwd=None, **kwargs):
         """Open a part whose reads are charged to the budget."""
@@ -265,8 +575,23 @@ class _GuardedArchive(zipfile.ZipFile):
             raise _TooMuchData
         part = super().open(info, mode, pwd, **kwargs)
         counter = xml.parsers.expat.ParserCreate()
-        counter.StartElementHandler = self._charge_nodes
+        counter.StartElementHandler = (
+            self._charge_style_nodes if info.filename == _STYLES_PART
+            else self._charge_nodes
+        )
         counter.StartDoctypeDeclHandler = _refuse_doctype
+        if info.filename.startswith("xl/worksheets/"):
+            formulas = _UncalculatedFormulas()
+            self.uncalculated[info.filename] = formulas.cells
+            charge = counter.StartElementHandler
+
+            def start(name, attributes):
+                charge(name, attributes)
+                formulas.start(name, attributes)
+
+            counter.StartElementHandler = start
+            counter.EndElementHandler = formulas.end
+            counter.CharacterDataHandler = formulas.text
         read = part.read
 
         def charged_read(size=-1):
@@ -291,6 +616,16 @@ class _GuardedArchive(zipfile.ZipFile):
         self._nodes_left -= 1 + len(attributes)
         if self._nodes_left < 0:
             raise _TooMuchData
+
+    def _charge_style_nodes(self, name, attributes) -> None:
+        """Charge a stylesheet node to both budgets; check its format."""
+        self._style_nodes_left -= 1 + len(attributes)
+        if (
+            self._style_nodes_left < 0
+            or len(attributes.get("formatCode", "")) > _MAX_FORMAT_CODE
+        ):
+            raise _TooMuchData
+        self._charge_nodes(name, attributes)
 
 
 def _refuse_doctype(*declaration) -> None:
@@ -400,7 +735,8 @@ def _holds_semicolon_lines(sheet) -> bool:
     as the delimiter: each whole line lands in column A, split again
     into the next columns wherever a value holds a comma, even one in
     the name ("ČEZ, a. s."). So each row's line is rebuilt first (see
-    _line_fields). Every line must hold a semicolon, and more than
+    _line_fields). Every line must hold a semicolon, but a first line
+    of one cell may be a title (see _after_header), and more than
     half of them must follow the documented layout: nothing but a
     name before the first semicolon, and a second field that is empty,
     an ISIN or a label, or, in a line of three fields or more, a short
@@ -415,9 +751,14 @@ def _holds_semicolon_lines(sheet) -> bool:
     """
     checked = laid_out = 0
     decoded: dict[str, str] = {}
+    first = True
     for _, cells in _filled_rows(sheet, _LINE_COLUMNS):
+        title = first and sum(1 for cell in cells if cell.strip()) == 1
+        first = False
         # Joining the cells with commas adds no semicolon.
         if not any(";" in cell for cell in cells):
+            if title:
+                continue
             return False
         # Decoded, and empty when invisible, as the entity rows see it.
         fields = [
@@ -495,9 +836,27 @@ def _decode(content: bytes) -> str:
     text = content.decode("utf-8-sig", errors="replace")
     if _is_mostly_utf8(text):
         return text
+    # ISO 8859-2, as Unix tools and older bank systems export Czech,
+    # shares most letters with cp1250 but not Š, Ž, Ť, š, ž and ť: its
+    # text has none of the bytes 0x80-0x9F (control characters there,
+    # letters in cp1250) and some byte the two read differently.
+    if not _CP1250_ONLY.search(content) and _LATIN2_DIFFERS.search(content):
+        return content.decode("iso8859_2")
     # The five bytes cp1250 leaves undefined become U+FFFD: read as
     # latin-1 instead, every Czech letter in the file would be garbled.
     return content.decode("cp1250", errors="replace")
+
+
+#: Bytes that are letters in cp1250 but control characters in ISO
+#: 8859-2, and bytes the two encodings read as different letters.
+_CP1250_ONLY = re.compile(rb"[\x80-\x9f]")
+_LATIN2_DIFFERS = re.compile(
+    b"[" + b"".join(
+        re.escape(bytes([byte])) for byte in range(0xA0, 0x100)
+        if bytes([byte]).decode("cp1250", "replace")
+        != bytes([byte]).decode("iso8859_2")
+    ) + b"]"
+)
 
 
 def _is_mostly_utf8(text: str) -> bool:
@@ -533,6 +892,18 @@ def _read_csv(content: bytes, delimiter: str | None) -> list[_Row]:
             itertools.islice((line for line in lines if line.strip()), 5)
         )
         delimiter = max((",", ";", "\t"), key=sample.count)
+    return _read_text(text, delimiter, _UNREADABLE_TEXT)
+
+
+def _read_text(
+    text: str, delimiter: str, unreadable: tuple[str, str]
+) -> list[_Row]:
+    """Read delimited text's entity rows (see _entity_rows).
+
+    Raises:
+        InputError: With the ``unreadable`` message (English, Czech)
+            when the csv module cannot read the text.
+    """
     # newline="" leaves line endings to the csv module, which accepts
     # \n, \r\n and the lone \r of old Mac files alike.
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
@@ -544,8 +915,8 @@ def _read_csv(content: bytes, delimiter: str | None) -> list[_Row]:
     try:
         return _entity_rows(rows)
     except csv.Error as error:  # e.g. a cell over the 128 KB limit
-        logger.warning("Failed to parse uploaded text file: %s", error)
-        raise InputError(*_UNREADABLE_TEXT) from error
+        logger.warning("Failed to parse delimited text: %s", error)
+        raise InputError(*unreadable) from error
 
 
 def _entity_rows(rows: Iterable[_Row]) -> list[_Row]:
@@ -575,9 +946,9 @@ def _entity_rows(rows: Iterable[_Row]) -> list[_Row]:
         if len(kept) > MAX_ENTITIES:
             raise InputError(
                 f"Too many entities (more than {MAX_ENTITIES}). The "
-                f"maximum is {MAX_ENTITIES} per file.",
+                f"maximum is {MAX_ENTITIES} per search.",
                 f"Příliš mnoho subjektů (více než {MAX_ENTITIES}). "
-                f"Maximum je {MAX_ENTITIES} na soubor.",
+                f"Maximum je {MAX_ENTITIES} na jedno vyhledávání.",
             )
     return kept
 
@@ -605,7 +976,8 @@ def _after_header(rows: Iterator[_Row]) -> Iterator[_Row]:
 
     A first row of one filled cell may be a title ("Seznam subjektů",
     or "Firmy", itself a label) above the header: it is skipped with
-    the next row when that is a header of two labels or more.
+    the next row when that is a header of two labels or more, numbered
+    labels ("Adresa 1") counted.
     Otherwise such a row is data unless it is a header of its own, so
     a list of names keeps its first name whatever the second is.
     """
@@ -617,7 +989,9 @@ def _after_header(rows: Iterator[_Row]) -> Iterator[_Row]:
         second = next(rows, None)
         if (
             second is not None and _is_header(second[1])
-            and sum(_labels(second[1])) >= 2
+            and sum(_labels(second[1])) + sum(
+                1 for cell in second[1] if _is_numbered_label(cell)
+            ) >= 2
         ):
             yield from rows
             return
@@ -693,16 +1067,22 @@ def _looks_like_data(cell: str) -> bool:
 def _is_numbered_label(cell: str) -> bool:
     """Whether a cell is a label with a column number, as "Address 1".
 
-    Its words are labels and short numbers ("ADDR_LINE_1", "Adresa
-    2"). It is not counted as a label either: "Firma 1" may name the
-    first entity of a test list.
+    Its words are labels, with an address-line word among them, and it
+    ends in a short number ("ADDR_LINE_1", "Adresa 2"). A street with
+    its house number is data: "Obchodní 12" and "25 Town Street" are
+    made of label words too. A numbered label is not counted as a label
+    either: "Firma 1" may name the first entity of a test list.
     """
     words = _words(_LABEL_NOTE.sub(" ", cell))
-    numbers = [word for word in words if word.isdigit()]
     return (
-        0 < len(numbers) < len(words)
-        and all(len(word) <= _LABEL_NUMBER_DIGITS for word in numbers)
-        and all(word in _HEADER_WORDS or word.isdigit() for word in words)
+        len(words) > 1 and words[-1].isdigit()
+        and len(words[-1]) <= _LABEL_NUMBER_DIGITS
+        and any(word in _NUMBERED_LABEL_WORDS for word in words)
+        and all(
+            word in _HEADER_WORDS or word in _NUMBERED_LABEL_WORDS
+            or word.isdigit() and len(word) <= _LABEL_NUMBER_DIGITS
+            for word in words
+        )
     )
 
 
