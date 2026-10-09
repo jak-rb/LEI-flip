@@ -628,6 +628,50 @@ class GleifClient:
         """Search by name with no country filter, as a fallback."""
         return self.search_by_name(name, country=None, page_size=page_size)
 
+    def search_by_fuzzy_name(self, name: str) -> list[GleifCandidate]:
+        """The records of the legal names GLEIF's fuzzy search suggests.
+
+        The fallback for a name the other searches find nothing for, as
+        when it is misspelled ("Goldman Sachs Asset Managment"): GLEIF's
+        filters match whole words, while its fuzzy completions (the
+        GLEIF website's "Did you mean" list) tolerate typos. They name
+        up to ten records, fetched here in one request. A query GLEIF
+        refuses (a name over 255 characters) finds nothing, as the
+        other searches took it.
+
+        Args:
+            name: The entity name to search for.
+
+        Returns:
+            The suggested records, in the order GLEIF suggests them.
+        """
+        params = {"field": "entity.legalName", "q": name}
+        try:
+            completions = self._request("/fuzzycompletions", params)
+        except GleifQueryError as exc:
+            logger.warning("GLEIF refused a fuzzy name search: %s", exc)
+            return []
+        leis: list[str] = []
+        for completion in completions.get("data", []):
+            record = (
+                completion.get("relationships", {})
+                .get("lei-records", {}).get("data") or {}
+            )
+            lei = record.get("id")
+            if lei and lei not in leis:
+                leis.append(lei)
+        if not leis:
+            return []
+        params = {"filter[lei]": ",".join(leis), "page[size]": str(len(leis))}
+        data = self._request("/lei-records", params)
+        # GLEIF lists the records by LEI; its suggestions come by
+        # relevance, which decides ties later on (see core/lookup.py).
+        found = {
+            candidate.lei: candidate
+            for candidate in map(_parse_candidate, data.get("data", []))
+        }
+        return [found[lei] for lei in leis if lei in found]
+
     def search_by_isin(self, isin: str) -> list[GleifCandidate]:
         """Full-text search for records mentioning an ISIN.
 

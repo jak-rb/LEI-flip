@@ -57,6 +57,9 @@ class _CannedGleif:
     def search_by_name_no_country(self, name, page_size=10):
         return self.by_name
 
+    def search_by_fuzzy_name(self, name):
+        return []
+
     def search_by_isin(self, isin):
         return self.by_isin
 

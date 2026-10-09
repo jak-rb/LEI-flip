@@ -221,6 +221,9 @@ class _RecordingClient:
         self.countries.append(None)
         return []
 
+    def search_by_fuzzy_name(self, name):
+        return []
+
     def search_by_isin(self, isin):
         return []
 

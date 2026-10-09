@@ -153,7 +153,8 @@ def lookup_entity(
 ) -> tuple[LookupResult, list[CandidateSummary]]:
     """Run the name + address matching pipeline for one entity.
 
-    Searches GLEIF by name (narrowing by country when known), scores
+    Searches GLEIF by name (narrowing by country when known, and
+    falling back to GLEIF's fuzzy search when nothing is found), scores
     every candidate with the matcher, and classifies the outcome
     precision-first: a confident FULL_MATCH asserts the LEI, while
     weaker name-only or HQ-only hits stay NO_MATCH unless the entity's
@@ -250,6 +251,11 @@ def _lookup(
     if not candidates and (iso_country or isin_country):
         logger.info("Retrying with no country filter.")
         candidates = client.search_by_name_no_country(entity.name)
+    # GLEIF's filters match whole words, so a misspelled name finds
+    # nothing; the matcher still decides what its suggestions are.
+    if not candidates:
+        logger.info("Retrying with GLEIF's fuzzy name search.")
+        candidates = client.search_by_fuzzy_name(entity.name)
 
     if not candidates:
         logger.info("No GLEIF candidates for %s", entity.name)

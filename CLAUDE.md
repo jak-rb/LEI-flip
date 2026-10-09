@@ -332,7 +332,15 @@ single streaming request that looked up a whole bulk file is gone. Instead:
 
 Each stored result row is the entity's `input`, its `match` (a `LookupResult`)
 and up to 3 `closest` candidates for manual review
-(`core/lookup.CLOSEST_CANDIDATE_LIMIT`). ISIN resolution is unchanged from the
+(`core/lookup.CLOSEST_CANDIDATE_LIMIT`). When no name search finds a
+record (with the country, the ISIN's country, then none), GLEIF's fuzzy
+completions supply the candidates (`GleifClient.search_by_fuzzy_name`,
+the GLEIF website's "Did you mean" list), as its filters match whole
+words: "GOLDMAN SACHS ASSET MANAGMENT" got "No LEI found" until
+2026-10-09. The matcher still decides. The offline replay with GLEIF's
+live fuzzy replies for the 68 of its 340 cases that reach it: 2 typos
+newly matched right, no wrong LEI; GLEIF suggests nothing for a typo in
+the first word or a spelled-out legal form. ISIN resolution is unchanged from the
 original: when name+address yields no confident match, a validated ISIN
 (`core/isin.py`) can find a LEI directly, corroborate a near-miss, or - as a
 last resort - be resolved to an issuer name via OpenFIGI (`core/openfigi.py`)
