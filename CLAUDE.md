@@ -324,10 +324,16 @@ single streaming request that looked up a whole bulk file is gone. Instead:
    read at a time (`core/gleif.read_body`), and each request runs under a
    `core/gleif.DeadlineWatch`: the connections of a `watched_session`
    report themselves to it, and a timer shuts the socket down 1 s after
-   the deadline (`_WATCH_GRACE`). That also ends headers, redirects, 1xx
-   replies and gzip or chunked bodies that trickle in, where urllib3 and
-   http.client read many times inside one call; DNS and the TLS handshake
-   stay bounded only per read. Tests fake OpenFIGI at `openfigi._post`.
+   the deadline (`_WATCH_GRACE`). That also ends headers, 1xx replies
+   and gzip or chunked bodies that trickle in, where urllib3 and
+   http.client read many times inside one call; DNS, the TLS handshake
+   and a redirect followed after the timer fired stay bounded only per
+   read. On Linux (Vercel and CodeNOW alike) the shut socket reads as the
+   reply's end rather than failing, so `read_body` takes a reply that
+   ends past the deadline as cut off too (until 2026-10-09 a reply cut
+   mid-headers came back as an empty 200, and OpenFIGI's was stored as a
+   final no-match; `tests/test_deadline_watch.py` runs with Linux's reads
+   emulated as well). Tests fake OpenFIGI at `openfigi._post`.
 4. When `done` the page reloads and the server renders the detailed tables.
 
 Each stored result row is the entity's `input`, its `match` (a `LookupResult`)

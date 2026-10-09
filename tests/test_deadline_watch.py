@@ -145,11 +145,44 @@ def serve(monkeypatch):
         server.close()
 
 
+@pytest.fixture(params=["native", "linux"])
+def shut_down_reads(request, monkeypatch):
+    """Reads a socket the watch shut down as here, and as on Linux.
+
+    On Linux, where the app runs, the read returns EOF (0 bytes) where
+    Windows makes it fail, so a reply can end as if complete.
+    """
+    if request.param == "native":
+        return
+    shut = set()
+    real_shut_down = gleif.DeadlineWatch._shut_down
+    real_readinto = socket.SocketIO.readinto
+
+    def shut_down(watch):
+        sock = getattr(watch._connection, "sock", None)
+        if sock is not None:
+            shut.add(sock)
+        real_shut_down(watch)
+
+    def readinto(stream, buffer):
+        if stream._sock in shut:
+            return 0
+        try:
+            return real_readinto(stream, buffer)
+        except OSError:
+            if stream._sock in shut:
+                return 0
+            raise
+
+    monkeypatch.setattr(gleif.DeadlineWatch, "_shut_down", shut_down)
+    monkeypatch.setattr(socket.SocketIO, "readinto", readinto)
+
+
 @pytest.mark.parametrize("reply", [
     _slow_header, _slow_gzip_body, _slow_chunked_trailer,
 ])
 def test_a_trickling_gleif_reply_stops_soon_after_the_deadline(
-    serve, reply,
+    serve, shut_down_reads, reply,
 ):
     serve(reply)
     with GleifClient(timeout=TIMEOUT) as client:
@@ -160,7 +193,9 @@ def test_a_trickling_gleif_reply_stops_soon_after_the_deadline(
     assert time.monotonic() - started < BOUND
 
 
-def test_a_trickling_openfigi_reply_stops_soon_after_the_deadline(serve):
+def test_a_trickling_openfigi_reply_stops_soon_after_the_deadline(
+    serve, shut_down_reads,
+):
     serve(_slow_header)
     started = time.monotonic()
     with pytest.raises(DeadlineExceeded):

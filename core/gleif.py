@@ -154,9 +154,12 @@ class DeadlineWatch:
     active in a thread, the connections of a watched_session tell it
     which one the request uses, and a timer shuts that connection's
     socket down at the deadline plus _WATCH_GRACE. The blocked read then
-    fails, and the request ends as a connection error past the deadline,
-    which the callers report as a cut-off. DNS resolution and the TLS
-    handshake are not covered.
+    fails (Windows) or reads as the end of the reply (Linux), so the
+    request ends as a connection error past the deadline, or as a reply
+    that ends past it, which read_body raises as DeadlineExceeded; the
+    callers report both as a cut-off. Not covered: DNS resolution, the
+    TLS handshake, and a redirect followed once the timer has fired
+    (that request is bounded only per read).
 
     Args:
         deadline: Optional ``time.monotonic()`` value; None watches
@@ -263,7 +266,10 @@ def read_body(resp: requests.Response, deadline: Optional[float]) -> bytes:
     far. Each read here takes what one socket read brings (more, inside
     urllib3, for a compressed or chunked body), and the deadline is
     checked in between; the request's DeadlineWatch bounds the reads
-    between two checks. The reply is closed either way.
+    between two checks. A reply that ends past the deadline counts as
+    cut off too: on Linux a socket the watch shut down reads as the end
+    of the reply, which may have stopped mid-headers. The reply is
+    closed either way.
 
     Args:
         resp: A reply requested with ``stream=True``.
@@ -277,11 +283,11 @@ def read_body(resp: requests.Response, deadline: Optional[float]) -> bytes:
     try:
         while True:
             chunk = resp.raw.read1(_READ_SIZE, decode_content=True)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise DeadlineExceeded("Reply cut off by the deadline")
             if not chunk:
                 break
             chunks.append(chunk)
-            if deadline is not None and time.monotonic() >= deadline:
-                raise DeadlineExceeded("Reply cut off by the deadline")
     except (urllib3.exceptions.HTTPError, OSError) as e:
         # What requests would raise for the same failure while it
         # reads the body itself.
