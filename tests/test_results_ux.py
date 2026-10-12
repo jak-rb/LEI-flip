@@ -3,10 +3,11 @@
 
 Covers the notes shown in both languages (every note the lookup code
 can write has a Czech version), how a matched row says an ISIN-based
-match was made, the "You searched" line, the summary card counts
-returned by /api/decision, the bilingual 404 replies, and the
-stepper's handling of a failed save (driven in Node when it is on
-PATH). GLEIF and OpenFIGI are faked; nothing touches the network.
+match was made, the searched row heading the candidates, the summary
+card counts returned by /api/decision, the bilingual 404 replies, and
+the stepper's handling of a failed save and the searched row's arrow
+(driven in Node when it is on PATH). GLEIF and OpenFIGI are faked;
+nothing touches the network.
 """
 
 import csv
@@ -396,49 +397,79 @@ def test_downloads_keep_the_english_notes(client):
     assert "nebylo" not in csv
 
 
-def test_you_searched_shows_every_given_field(client):
+def _text(markup):
+    """The text of a piece of markup, its whitespace collapsed."""
+    return " ".join(re.sub(r"<[^>]+>", " ", markup).split())
+
+
+def _searched_rows(page):
+    """Each searched row's cells, and the fields its arrow opens."""
+    return [
+        (
+            [_text(cell) for cell in re.findall(
+                r"<td[^>]*>(.*?)</td>", row, re.DOTALL,
+            )],
+            [(_text(label), _text(value)) for label, value in re.findall(
+                r"<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>", detail,
+                re.DOTALL,
+            )],
+        )
+        for row, detail in re.findall(
+            r'<tr class="searched-row">(.*?)</tr>\s*'
+            r'<tr class="candidate-detail" hidden>(.*?)</tr>',
+            page, re.DOTALL,
+        )
+    ]
+
+
+def test_the_searched_row_heads_the_candidates_with_every_given_field(
+    client,
+):
     # Reviewers need the whole row to compare a candidate with it: the
-    # street, the postal code and the ISIN too (2026-10-06).
+    # street, the postal code and the ISIN too (2026-10-06). Since
+    # 2026-10-12 it is the candidate table's first row, in the same
+    # columns, its arrow opening what has no column.
     job_id = _finished_job(client, [
         "Review City,,,Praha",
         "Review Country,,CZ",
         "Review All,US0378331005,CZ,Praha,Vinohradska 1,120 00",
         "Review Neither",
     ])
-    lines = [
-        " ".join(re.sub(r"<[^>]+>", " ", block).split())
-        for block in re.findall(
-            r'<p class="detail-searched">(.*?)</p>', _page(client, job_id),
-            re.DOTALL,
-        )
-    ]
-    assert lines == [
-        "You searched: Review City City Praha",
-        "You searched: Review Country Country CZ",
-        "You searched: Review All ISIN US0378331005 Country CZ City Praha "
-        "Street Vinohradska 1 Postal code 120 00",
-        "You searched: Review Neither",
-    ]
     page = _page(client, job_id)
-    assert 'data-en="Postal code" data-cs="PSČ"' in page
-    assert 'data-en="Street" data-cs="Ulice"' in page
+    tag = "Searched entity"
+    none_given = [("ISIN", "-"), ("Street", "-"), ("Postal code", "-")]
+    assert _searched_rows(page) == [
+        (["", "Review City", "", "Praha", "", tag], none_given),
+        (["", "Review Country", "CZ", "", "", tag], none_given),
+        (["", "Review All", "CZ", "Praha", "", tag], [
+            ("ISIN", "US0378331005"), ("Street", "Vinohradska 1"),
+            ("Postal code", "120 00"),
+        ]),
+        (["", "Review Neither", "", "", "", tag], none_given),
+    ]
+    first_rows = re.findall(
+        r'class="results-table candidates-table">.*?<tbody>\s*(<tr[^>]*>)',
+        page, re.DOTALL,
+    )
+    assert first_rows == ['<tr class="searched-row">'] * 4
+    assert 'data-cs="Hledaný subjekt" data-en="Searched entity"' in page
+    assert 'data-cs="Ulice" data-en="Street"' in page
+    assert 'data-cs="PSČ" data-en="Postal code"' in page
 
 
 @pytest.mark.parametrize(
-    ("country", "city", "expected"),
+    ("country", "city", "shown"),
     [
-        ("   ", "Praha", "You searched: Review Single City Praha"),
-        ("CZ", "  ", "You searched: Review Single Country CZ"),
-        (" ", " ", "You searched: Review Single"),
-        (" CZ ", " Praha ",
-         "You searched: Review Single Country CZ City Praha"),
+        ("   ", "Praha", ["", "Praha"]),
+        ("CZ", "  ", ["CZ", ""]),
+        (" ", " ", ["", ""]),
+        (" CZ ", " Praha ", ["CZ", "Praha"]),
     ],
 )
-def test_you_searched_skips_blank_place_parts_of_the_form(
-    client, country, city, expected,
+def test_the_searched_row_leaves_blank_place_parts_of_the_form_empty(
+    client, country, city, shown,
 ):
-    # The single form stores country and city as typed, so a part
-    # made only of spaces must count as not given.
+    # A part made only of spaces counts as not given.
     created = client.post("/api/jobs", data={
         "mode": "single", "entity_name": "Review Single",
         "country": country, "city": city,
@@ -448,11 +479,32 @@ def test_you_searched_skips_blank_place_parts_of_the_form(
     while not client.post(f"/api/jobs/{job_id}/run").get_json()["done"]:
         pass
 
-    block = re.search(
-        r'<p class="detail-searched">(.*?)</p>', _page(client, job_id),
-        re.DOTALL,
-    ).group(1)
-    assert " ".join(re.sub(r"<[^>]+>", " ", block).split()) == expected
+    [(cells, _)] = _searched_rows(_page(client, job_id))
+    assert cells[1:4] == ["Review Single", *shown]
+
+
+def test_a_value_of_only_spaces_shows_as_not_given():
+    # Rows stored before the single form trimmed its fields kept them
+    # as typed: a part made only of spaces still counts as not given.
+    entity = InputEntity(name="Review Spaces")
+    row = app_module._result_row(entity, LookupResult(), [
+        CandidateSummary(legal_name="Review Ltd", lei=REVIEW_LEI,
+                         status="ISSUED"),
+    ])
+    row["input"].update(
+        country="  ", city=" Praha ", street=" ", postal_code=" 120 00 ",
+    )
+    job_id = secrets.token_hex(16)
+    storage.create_search(job_id, "bulk", [row["input"]])
+    storage.append_results(job_id, [row], 0)
+    page = flask_app.test_client().get(
+        f"/results?job={job_id}",
+    ).get_data(as_text=True)
+    assert _searched_rows(page) == [(
+        ["", "Review Spaces", "", "Praha", "", "Searched entity"],
+        [("ISIN", "-"), ("Street", "-"), ("Postal code", "120 00")],
+    )]
+    assert "<td>Praha</td>" in page and "<dd>120 00</dd>" in page
 
 
 def _card_counts(page):
@@ -543,7 +595,8 @@ def test_decision_buttons_have_a_disabled_look():
 # ---- The stepper's saves, driven in Node ----
 
 _APP_JS = ROOT / "src" / "main" / "static" / "app.js"
-_SAVE_HARNESS = r"""
+#: A tiny fake DOM for the harnesses: elements found by class name.
+_FAKE_DOM = r"""
 "use strict";
 const fs = require("fs");
 const vm = require("vm");
@@ -612,7 +665,8 @@ class Element {
         if (!this.disabled) { this.listeners.forEach((fn) => fn({})); }
     }
 }
-
+"""
+_SAVE_HARNESS = _FAKE_DOM + r"""
 const records = [0, 1].map((i) => new Element(
     "validate-record",
     { dataset: { index: String(i), decision: "", chosen: "" } },
@@ -817,6 +871,78 @@ def test_failed_save_in_czech_then_a_good_save_updates_the_card(tmp_path):
         "", "confirmed", "none", "none",
     ]
     assert all(view["enabled"] for view in seen)
+
+
+_EXPAND_HARNESS = _FAKE_DOM + r"""
+// One record: the searched row and a candidate, each followed by its
+// detail row, as results.html renders them.
+const arrow = () => new Element("candidate-expand", {
+    attributes: { "aria-expanded": "false" },
+});
+const searched = new Element("searched-row", {}, [arrow()]);
+const candidate = new Element(
+    "candidate-row", { dataset: { lei: "LEI0" } },
+    [arrow(), new Element("btn candidate-confirm")],
+);
+const record = new Element(
+    "validate-record", { dataset: { index: "0", decision: "", chosen: "" } },
+    [
+        new Element("tbody", {}, [
+            searched, new Element("candidate-detail", { hidden: true }),
+            candidate, new Element("candidate-detail", { hidden: true }),
+        ]),
+        new Element("btn validate-none"),
+    ],
+);
+const page = new Element("page", {}, [
+    new Element("validation", { dataset: { job: "a".repeat(32) } }, [
+        new Element("validation-prev"),
+        new Element("validation-position"),
+        new Element("validation-next"),
+        record,
+    ]),
+]);
+const document = {
+    documentElement: { lang: "en", getAttribute: () => null },
+    querySelector: (selector) => page.querySelector(selector),
+    getElementById: () => null,
+    addEventListener() {},
+};
+
+const context = vm.createContext({ document, console });
+vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), context);
+vm.runInContext("setupValidation()", context);
+// Per row: what its arrow says, and whether its detail shows.
+const state = () => [searched, candidate].map((row) => [
+    row.querySelector(".candidate-expand").getAttribute("aria-expanded"),
+    !row.nextElementSibling.hidden,
+]);
+const seen = [state()];
+searched.querySelector(".candidate-expand").click();
+seen.push(state());
+searched.querySelector(".candidate-expand").click();
+seen.push(state());
+console.log(JSON.stringify(seen));
+"""
+
+
+@_needs_node
+def test_the_searched_rows_arrow_opens_its_detail(tmp_path):
+    # Like a candidate's, the searched row's arrow opens the fields that
+    # have no column (the ISIN, street and postal code), then closes them.
+    harness = tmp_path / "expand_harness.js"
+    harness.write_text(_EXPAND_HARNESS, encoding="utf-8")
+    finished = subprocess.run(
+        ["node", str(harness), str(_APP_JS)],
+        capture_output=True, text=True, timeout=60, check=True,
+        encoding="utf-8",
+    )
+    closed = ["false", False]
+    assert json.loads(finished.stdout) == [
+        [closed, closed],
+        [["true", True], closed],
+        [closed, closed],
+    ]
 
 
 def test_card_state_texts_match_the_template():

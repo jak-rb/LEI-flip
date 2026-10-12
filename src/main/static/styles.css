@@ -788,24 +788,10 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
 
 /* ---- Validation stepper -------------------------------------------------- */
 
-/* A long unbroken name must wrap, not widen the page on a phone. Each
-   field the row gave follows the name, labelled, so the candidates can
-   be compared with all of it. */
-.detail-searched { margin: 0 0 1rem; color: var(--muted); overflow-wrap: anywhere; }
-.detail-searched strong { color: var(--fg); margin-right: 0.35rem; }
-.searched-field { display: inline-block; margin-right: 0.9rem; color: var(--fg); }
-.searched-label {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
 /* Why the row was not matched (an OpenFIGI issuer name, an HQ-only
    address...). */
 .detail-note {
-  margin: -0.4rem 0 1rem;
+  margin: 0 0 1rem;
   padding-left: 0.6rem;
   border-left: 3px solid var(--warn);
   font-size: 0.85rem;
@@ -928,6 +914,24 @@ ul.card-subtitle li { margin-bottom: 0.4rem; }
 
 .candidate-row.is-chosen,
 .candidate-row.is-chosen .col-confirm { background: var(--ok-bg); }
+
+/* The searched row heads the candidates, in their columns: tinted with
+   the validation yellow, it reads as the record under review. What was
+   typed may be long ("United Kingdom", where a candidate has "GB"), so
+   it wraps and the table still fits a desktop screen. */
+.searched-row td,
+.candidates-table .searched-row .col-confirm { background: var(--warn-bg); }
+.searched-row td { white-space: normal; }
+.searched-row .col-name { font-weight: 700; }
+.searched-tag {
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
 
 .candidate-expand {
   border: none;

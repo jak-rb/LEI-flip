@@ -604,15 +604,33 @@ def _review_job():
     return _lookup_job((entity, _CannedGleif([near])))
 
 
+def _searched_row(page):
+    """The searched row's cells, and the fields its arrow opens."""
+    def text(markup):
+        return " ".join(re.sub(r"<[^>]+>", " ", markup).split())
+
+    row, detail = re.search(
+        r'<tr class="searched-row">(.*?)</tr>\s*'
+        r'<tr class="candidate-detail" hidden>(.*?)</tr>',
+        page, re.DOTALL,
+    ).groups()
+    cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
+    fields = re.findall(
+        r"<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>", detail, re.DOTALL,
+    )
+    return (
+        [text(cell) for cell in cells],
+        [(text(label), text(value)) for label, value in fields],
+    )
+
+
 def test_the_stepper_shows_the_whole_searched_row():
-    page = _page(_review_job())
-    searched = re.search(
-        r'<p class="detail-searched">(.*?)</p>', page, re.DOTALL,
-    ).group(1)
-    text = " ".join(re.sub(r"<[^>]+>", " ", searched).split())
-    assert text == (
-        "You searched: Alpha Holding a.s. ISIN CZ0009010468 Country CZ "
-        "City Brno Street Hlavni 1 Postal code 602 00"
+    # In the candidates' columns, so each is compared with it; the rest
+    # behind its arrow (a reviewer's sketch, 2026-10-12).
+    assert _searched_row(_page(_review_job())) == (
+        ["", "Alpha Holding a.s.", "CZ", "Brno", "", "Searched entity"],
+        [("ISIN", "CZ0009010468"), ("Street", "Hlavni 1"),
+         ("Postal code", "602 00")],
     )
 
 
@@ -623,11 +641,9 @@ def test_the_stepper_shows_an_isin_only_row_by_its_isin_once():
         _candidate("Beta Holding a.s.", "B" * 20),
     ]
     page = _page(_lookup_job((entity, _CannedGleif(by_isin=records))))
-    searched = re.search(
-        r'<p class="detail-searched">(.*?)</p>', page, re.DOTALL,
-    ).group(1)
-    assert " ".join(re.sub(r"<[^>]+>", " ", searched).split()) == (
-        "You searched: CZ0009010468 Country CZ"
+    assert _searched_row(page) == (
+        ["", "CZ0009010468", "CZ", "", "", "Searched entity"],
+        [("Street", "-"), ("Postal code", "-")],
     )
 
 
