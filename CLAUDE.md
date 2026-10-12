@@ -558,6 +558,13 @@ page and in the downloads alike.
 
 ### Current state
 
+**Not deployed since 2026-10-12.** At the owner's request the Vercel
+project (lei-lookup.vercel.app, lei-flip.vercel.app) was deleted and its
+Neon database detached for deletion, the stored searches with it. The
+code and the deployment notes above stay for reference: `vercel deploy`
+would now create a new project, which needs its own `DATABASE_URL`. The
+CodeNOW version is on branch `codenow` (= `main`).
+
 Open items of the 2026-10-06 sessions, and what a next session could take
 up, are in `HANDOFF.md`.
 
