@@ -847,9 +847,11 @@ function setupValidation() {
         }
     }
 
-    // Wire each record's expand arrows and decision buttons.
+    // Wire each record's expand arrows (the searched row has one too)
+    // and decision buttons.
     records.forEach((record) => {
-        record.querySelectorAll(".candidate-row").forEach((row) => {
+        const rows = record.querySelectorAll(".searched-row, .candidate-row");
+        rows.forEach((row) => {
             const expandBtn = row.querySelector(".candidate-expand");
             const detail = row.nextElementSibling; // its .candidate-detail
             if (expandBtn && detail) {

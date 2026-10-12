@@ -115,22 +115,6 @@
                  data-chosen="{{ rec.decision.lei if rec.decision
                                  and rec.decision.status == 'confirmed'
                                  else '' }}">
-            {# Everything the row gave, so each candidate can be compared
-               with it: the name (or the ISIN), then each filled field. #}
-            {% set given = [
-                ('ISIN', 'ISIN', rec.input.isin if rec.input.name else None),
-                ('Country', 'Země', rec.input.country),
-                ('City', 'Město', rec.input.city),
-                ('Street', 'Ulice', rec.input.street),
-                ('Postal code', 'PSČ', rec.input.postal_code),
-            ] %}
-            <p class="detail-searched">
-                <span data-cs="Hledali jste:" data-en="You searched:">You searched:</span>
-                <strong>{{ rec.input.name or rec.input.isin }}</strong>
-                {% for en, cs, value in given if value and value.strip() %}
-                <span class="searched-field"><span class="searched-label" data-en="{{ en }}" data-cs="{{ cs }}">{{ en }}</span> {{ value.strip() }}</span>
-                {% endfor %}
-            </p>
             {% if rec.notes %}
             <p class="detail-note"
                data-en="{{ rec.notes }}"
@@ -154,6 +138,44 @@
                         </tr>
                     </thead>
                     <tbody>
+                        {# Everything the row gave, so each candidate can be
+                           compared with it: first in the candidates' own
+                           columns (the name, or the ISIN), then behind the
+                           arrow what has no column. A value of only spaces
+                           counts as not given. #}
+                        <tr class="searched-row">
+                            <td class="col-expand">
+                                <button type="button" class="candidate-expand"
+                                        aria-expanded="false"
+                                        aria-label="More details"
+                                        data-cs-aria-label="Více podrobností"
+                                        data-en-aria-label="More details">
+                                    <span class="chevron" aria-hidden="true"></span>
+                                </button>
+                            </td>
+                            <td class="col-name">{{ rec.input.name or rec.input.isin }}</td>
+                            <td>{{ (rec.input.country or '').strip() }}</td>
+                            <td>{{ (rec.input.city or '').strip() }}</td>
+                            <td colspan="5"></td>
+                            <td class="col-confirm">
+                                <span class="searched-tag"
+                                      data-cs="Hledaný subjekt" data-en="Searched entity">Searched entity</span>
+                            </td>
+                        </tr>
+                        <tr class="candidate-detail" hidden>
+                            <td colspan="10">
+                                <dl class="candidate-detail-fields">
+                                    {% if rec.input.name %}
+                                    <dt>ISIN</dt>
+                                    <dd>{{ (rec.input.isin or '').strip() or '-' }}</dd>
+                                    {% endif %}
+                                    <dt data-cs="Ulice" data-en="Street">Street</dt>
+                                    <dd>{{ (rec.input.street or '').strip() or '-' }}</dd>
+                                    <dt data-cs="PSČ" data-en="Postal code">Postal code</dt>
+                                    <dd>{{ (rec.input.postal_code or '').strip() or '-' }}</dd>
+                                </dl>
+                            </td>
+                        </tr>
                         {% for c in rec.closest %}
                         <tr class="candidate-row{% if not c.usable %} is-stopped{% endif %}" data-lei="{{ c.lei }}">
                             <td class="col-expand">

@@ -481,10 +481,10 @@ note there, saying how it was made, and a GLEIF street "c/o" an agent (for
 many US companies GLEIF has only their registered agent's office, CSC's in
 Wilmington for FIRY INC) gets the page's own "Agent's address (c/o)" flag
 (`app._display_flags`), as a searched address rarely matches it.
-The stepper follows the reviewers' sketch of 2026-10-06: "You searched"
-lists every field the row gave (ISIN, country, city, street, postal
-code); a note says why the row was not matched (not the plain "not
-found"); and each candidate shows legal name, country, city, its name,
+The stepper follows the reviewers' sketch of 2026-10-06: the searched
+row shows every field the row gave (laid out as described below); a
+note says why the row was not matched (not the plain "not found"); and
+each candidate shows legal name, country, city, its name,
 city and address scores (`app._review_candidate`: green at the matcher's
 gate, red under it, a dash with nothing to compare; the address score is
 street and ZIP agreement, `core/lookup._street_zip_score`, stored as
@@ -492,7 +492,14 @@ street and ZIP agreement, `core/lookup._street_zip_score`, stored as
 **Accept** (was "Correct match", which read as a verdict). The street and
 the overall percent are gone from the table (the overall still orders
 the candidates), and the matched-records table shows no overall percent
-either (the confidence stays in the downloads). A candidate whose LEI is not ISSUED shows a red "!"
+either (the confidence stays in the downloads). Since a reviewer's
+sketch of 2026-10-12 the searched row is the candidate table's first
+row (it was a "You searched" line above it): its name (or ISIN),
+country and city in the candidates' columns (wrapping, so the table
+still fits a desktop), tinted yellow and tagged "Searched entity"
+where Accept sits, and its arrow opens what has no column - the ISIN
+(unless it fills the name column), street and postal code, a dash for
+one not given. A candidate whose LEI is not ISSUED shows a red "!"
 status and "View only" instead of Accept, and `record_decision` refuses
 it; a row is "to validate" only with a candidate it may accept
 (`core.models.has_acceptable_candidate`), so a row whose candidates are
